@@ -3,8 +3,8 @@
 This proposal is on adding a new op named *affine.graybox* to MLIR's [affine dialect](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md).
 The op allows the polyhedral form to be used without the need for outlining to
 functions, and without the need to turn affine ops such as affine.for, affine.if
-into standard unrestricted for's or to "list of basic blocks" control flow
-respectively. In particular, with an *affine.graybox*, it is possible to represent
+into standard unrestricted for's and if's respectively. In particular, with an 
+*affine.graybox*, it is possible to represent
 *every* load and store operation using an *affine.load* and *affine.store*
 respectively.
 
@@ -30,7 +30,7 @@ the previous design with significant implications.
 2. The requirement for an SSA value to be a valid symbol
    ([mlir::isValidSymbol](https://github.com/tensorflow/mlir/blob/3671cf5558a273a865007405503793746e4ddbb7/lib/Dialect/AffineOps/AffineOps.cpp#L128))
    changes so that it also includes (a) symbols at the top-level of any
-   *affine.graybox*, and (b) those values that dominate an affine graybox. In
+   *affine.graybox*, and (b) those values that dominate an *affine.graybox*. In
    the latter case, symbol validity is sensitive to the enclosing graybox. As
    such, there has to be an additional method: mlir::isValidSymbol(Value \*v,
    Operation \*op) to check for symbol validity for use in the specific op. See
@@ -75,6 +75,18 @@ An *affine region* is the set of all ops that have the same closest enclosing
 
 Every MLIR op is always part of a unique *affine region*.
 
+## Goals
+
+An *affine.graybox* op's goal is to start a new polyhedral symbol context for 
+its [*affine region*](#Terminology), i.e., IR that would have been otherwise 
+considered non-affine and failed verification will now be affine with grayboxes 
+inserted at the right places. In addition, this proposal ensures that:
+
+* all existing pattern rewrites work across graybox op boundaries,
+* all existing affine passes work correctly as is in the graybox ops while 
+  allowing affine passes to work seamlessly at a graybox-local affine level,
+* everything that forced function outlining due to symbol restrictions will no 
+  longer require such outlining.
 
 ## Examples
 
@@ -222,11 +234,11 @@ for (i = 0; i < N; ++i) {
    except that it does not walk regions of an affine.graybox.  Most polyhedral/affine passes will use this and thus see
    *affine.graybox* as opaque *for any walks from above*.
 
-   An affine pass' run should be changed to to run on its function op
-   as well as every *affine.graybox* op in the function op. Unfortunately, they
-   have to be done sequentially only because the "declaration" of the
+   An affine pass' run should be changed to run on its function op
+   as well as every *affine.graybox* op in the function op. Unfortunately, these
+   runs can only be done sequentially only because the "declaration" of the
    *affine.graybox* and the "imperative" call to it are one thing - the affine
-   grayboxes in a function are otherwise disjoint and can be otherwise been
+   grayboxes in a function are otherwise disjoint and can otherwise be
    processed in parallel. In summary, there can be an AffineFunctionPass that,
    instead of providing
    [runOnFunction](https://github.com/tensorflow/mlir/blob/8aadfe58a5deea85656a8d8318e6b40d9de350c4/include/mlir/Pass/Pass.h#L267)
@@ -388,7 +400,8 @@ replaceAllMemRefUsesWith() will all just work transparently and do the work: the
 non-dereferencing uses of that memref on an affine.graybox op just makes things
 like double buffering, data copy generation, etc. all bail out on those (just
 because it isn't polyhedrally analyzeable unless the graybox can be eliminated
-and you get a larger encompassing affine region) -- the same way they currently
+and you get a larger encompassing [*affine region*](#Terminology)) -- the same 
+way they currently
 bail out on any call ops taking memrefs as arguments or return ops returning
 memrefs.  The same is true for memref dependence analysis: there isn't a way to
 represent dependences between an affine access and another one that is inside
