@@ -10,25 +10,26 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifdef MLIR_CONVERSION_STANDARDTOSPIRV_TD
-#else
+#ifndef MLIR_CONVERSION_STANDARDTOSPIRV_TD
 #define MLIR_CONVERSION_STANDARDTOSPIRV_TD
 
-#ifdef STANDARD_OPS
-#else
 include "mlir/Dialect/StandardOps/Ops.td"
-#endif // STANDARD_OPS
-
-#ifdef SPIRV_OPS
-#else
 include "mlir/Dialect/SPIRV/SPIRVOps.td"
-#endif // SPIRV_OPS
 
 class BinaryOpPattern<Op src, Op tgt> :
       Pat<(src SPV_ScalarOrVector:$l, SPV_ScalarOrVector:$r),
           (tgt $l, $r)>;
 
 def : BinaryOpPattern<AddFOp, SPV_FAddOp>;
+def : BinaryOpPattern<DivFOp, SPV_FDivOp>;
 def : BinaryOpPattern<MulFOp, SPV_FMulOp>;
+def : BinaryOpPattern<RemFOp, SPV_FRemOp>;
+def : BinaryOpPattern<SubFOp, SPV_FSubOp>;
+
+// Constant Op
+// TODO(ravishankarm): Handle lowering other constant types.
+def : Pat<(ConstantOp:$result $valueAttr),
+          (SPV_ConstantOp $valueAttr),
+          [(SPV_ScalarOrVector $result)]>;
 
 #endif // MLIR_CONVERSION_STANDARDTOSPIRV_TD

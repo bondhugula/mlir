@@ -20,14 +20,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifdef LLVMIR_OP_BASE
-#else
+#ifndef LLVMIR_OP_BASE
 #define LLVMIR_OP_BASE
 
-#ifdef OP_BASE
-#else
 include "mlir/IR/OpBase.td"
-#endif // OP_BASE
 
 def LLVM_Dialect : Dialect {
   let name = "llvm";
@@ -37,6 +33,12 @@ def LLVM_Dialect : Dialect {
 // LLVM IR type wrapped in MLIR.
 def LLVM_Type : Type<CPred<"$_self.isa<::mlir::LLVM::LLVMType>()">,
                      "LLVM dialect type">;
+
+// Type constraint accepting only wrapped LLVM integer types.
+def LLVMInt : TypeConstraint<
+  And<[LLVM_Type.predicate,
+       CPred<"$_self.cast<::mlir::LLVM::LLVMType>().isIntegerTy()">]>,
+  "LLVM dialect integer">;
 
 // Base class for LLVM operations. Defines the interface to the llvm::IRBuilder
 // used to translate to LLVM IR proper.

@@ -2,7 +2,7 @@
 
 // CHECK-LABEL: func @ops(%arg0: !llvm.i32, %arg1: !llvm.float)
 func @ops(%arg0 : !llvm.i32, %arg1 : !llvm.float) {
-// Integer artithmetics binary operations.
+// Integer arithmetic binary operations.
 //
 // CHECK-NEXT:  %0 = llvm.add %arg0, %arg0 : !llvm.i32
 // CHECK-NEXT:  %1 = llvm.sub %arg0, %arg0 : !llvm.i32
@@ -87,6 +87,16 @@ func @ops(%arg0 : !llvm.i32, %arg1 : !llvm.float) {
   %25 = llvm.inttoptr %arg0 : !llvm.i32 to !llvm<"i32*">
   %26 = llvm.ptrtoint %25 : !llvm<"i32*"> to !llvm.i32
 
+// Extended and Quad floating point
+//
+// CHECK:       %27 = llvm.fpext %arg1 : !llvm.float to !llvm.x86_fp80
+// CHECK-NEXT:  %28 = llvm.fpext %arg1 : !llvm.float to !llvm.fp128
+  %27 = llvm.fpext %arg1 : !llvm.float to !llvm.x86_fp80
+  %28 = llvm.fpext %arg1 : !llvm.float to !llvm.fp128
+
+// CHECK:  %29 = llvm.fneg %arg1 : !llvm.float
+  %29 = llvm.fneg %arg1 : !llvm.float
+
 // CHECK:  llvm.return
   llvm.return
 }
@@ -152,7 +162,7 @@ func @foo(%arg0: !llvm.i32) -> !llvm<"{ i32, double, i32 }"> {
 
 // CHECK-LABEL: @casts
 func @casts(%arg0: !llvm.i32, %arg1: !llvm.i64, %arg2: !llvm<"<4 x i32>">,
-            %arg3: !llvm<"<4 x i64>">) {
+            %arg3: !llvm<"<4 x i64>">, %arg4: !llvm<"i32*">) {
 // CHECK-NEXT:  = llvm.sext %arg0 : !llvm.i32 to !llvm.i56
   %0 = llvm.sext %arg0 : !llvm.i32 to !llvm.i56
 // CHECK-NEXT:  = llvm.zext %arg0 : !llvm.i32 to !llvm.i64
@@ -165,15 +175,25 @@ func @casts(%arg0: !llvm.i32, %arg1: !llvm.i64, %arg2: !llvm<"<4 x i32>">,
   %4 = llvm.zext %arg2 : !llvm<"<4 x i32>"> to !llvm<"<4 x i64>">
 // CHECK-NEXT:  = llvm.trunc %arg3 : !llvm<"<4 x i64>"> to !llvm<"<4 x i56>">
   %5 = llvm.trunc %arg3 : !llvm<"<4 x i64>"> to !llvm<"<4 x i56>">
+// CHECK-NEXT:  = llvm.sitofp %arg0 : !llvm.i32 to !llvm.float
+  %6 = llvm.sitofp %arg0 : !llvm.i32 to !llvm.float
+// CHECK-NEXT:  = llvm.uitofp %arg0 : !llvm.i32 to !llvm.float
+  %7 = llvm.uitofp %arg0 : !llvm.i32 to !llvm.float
+// CHECK-NEXT:  = llvm.fptosi %7 : !llvm.float to !llvm.i32
+  %8 = llvm.fptosi %7 : !llvm.float to !llvm.i32
+// CHECK-NEXT:  = llvm.fptoui %7 : !llvm.float to !llvm.i32
+  %9 = llvm.fptoui %7 : !llvm.float to !llvm.i32
+// CHECK-NEXT:  = llvm.addrspacecast %arg4 : !llvm<"i32*"> to !llvm<"i32 addrspace(2)*">
+  %10 = llvm.addrspacecast %arg4 : !llvm<"i32*"> to !llvm<"i32 addrspace(2)*">
   llvm.return
 }
 
 // CHECK-LABEL: @vect
 func @vect(%arg0: !llvm<"<4 x float>">, %arg1: !llvm.i32, %arg2: !llvm.float) {
 // CHECK-NEXT:  = llvm.extractelement {{.*}} : !llvm<"<4 x float>">
-  %0 = llvm.extractelement %arg0, %arg1 : !llvm<"<4 x float>">
+  %0 = llvm.extractelement %arg0[%arg1 : !llvm.i32] : !llvm<"<4 x float>">
 // CHECK-NEXT:  = llvm.insertelement {{.*}} : !llvm<"<4 x float>">
-  %1 = llvm.insertelement %arg0, %arg2, %arg1 : !llvm<"<4 x float>">
+  %1 = llvm.insertelement %arg2, %arg0[%arg1 : !llvm.i32] : !llvm<"<4 x float>">
 // CHECK-NEXT:  = llvm.shufflevector {{.*}} [0 : i32, 0 : i32, 0 : i32, 0 : i32, 7 : i32] : !llvm<"<4 x float>">, !llvm<"<4 x float>">
   %2 = llvm.shufflevector %arg0, %arg0 [0 : i32, 0 : i32, 0 : i32, 0 : i32, 7 : i32] : !llvm<"<4 x float>">, !llvm<"<4 x float>">
 // CHECK-NEXT:  = llvm.mlir.constant(dense<1.000000e+00> : vector<4xf32>) : !llvm<"<4 x float>">
@@ -187,5 +207,14 @@ func @alloca(%size : !llvm.i64) {
   llvm.alloca %size x !llvm.i32 {alignment = 0} : (!llvm.i64) -> (!llvm<"i32*">)
   // CHECK-NEXT: llvm.alloca %{{.*}} x !llvm.i32 {alignment = 8 : i64} : (!llvm.i64) -> !llvm<"i32*">
   llvm.alloca %size x !llvm.i32 {alignment = 8} : (!llvm.i64) -> (!llvm<"i32*">)
+  llvm.return
+}
+
+// CHECK-LABEL: @null
+func @null() {
+  // CHECK: llvm.mlir.null : !llvm<"i8*">
+  %0 = llvm.mlir.null : !llvm<"i8*">
+  // CHECK: llvm.mlir.null : !llvm<"{ void (i32, void ()*)*, i64 }*">
+  %1 = llvm.mlir.null : !llvm<"{void(i32, void()*)*, i64}*">
   llvm.return
 }

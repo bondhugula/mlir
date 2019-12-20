@@ -78,7 +78,7 @@ getDirectionVectorStr(bool ret, unsigned numCommonLoops, unsigned loopNestDepth,
   return result;
 }
 
-// For each access in 'loadsAndStores', runs a depence check between this
+// For each access in 'loadsAndStores', runs a dependence check between this
 // "source" access and all subsequent "destination" accesses in
 // 'loadsAndStores'. Emits the result of the dependence check as a note with
 // the source access.
@@ -94,7 +94,7 @@ static void checkDependences(ArrayRef<Operation *> loadsAndStores) {
           getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
       for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
         FlatAffineConstraints dependenceConstraints;
-        llvm::SmallVector<DependenceComponent, 2> dependenceComponents;
+        SmallVector<DependenceComponent, 2> dependenceComponents;
         DependenceResult result = checkMemrefAccessDependence(
             srcAccess, dstAccess, d, &dependenceConstraints,
             &dependenceComponents);

@@ -1,4 +1,4 @@
-// RUN: mlir-opt %s -split-input-file -canonicalize | FileCheck %s
+// RUN: mlir-opt %s -split-input-file -pass-pipeline='func(canonicalize)' | FileCheck %s
 
 // Affine maps for test case: compose_affine_maps_1dto2d_no_symbols
 // CHECK-DAG: [[MAP0:#map[0-9]+]] = (d0) -> (d0 - 1)
@@ -258,15 +258,12 @@ func @trivial_maps() {
 }
 
 // CHECK-LABEL: func @partial_fold_map
-func @partial_fold_map(%arg0: memref<index>, %arg1: index, %arg2: index) {
+func @partial_fold_map(%arg1: index, %arg2: index) -> index {
   // TODO: Constant fold one index into affine.apply
   %c42 = constant 42 : index
   %2 = affine.apply (d0, d1) -> (d0 - d1) (%arg1, %c42)
-  store %2, %arg0[] : memref<index>
   // CHECK: [[X:%[0-9]+]] = affine.apply [[MAP15]]()[%{{.*}}]
-  // CHECK-NEXT: store [[X]], %{{.*}}
-
-  return
+  return %2 : index
 }
 
 // CHECK-LABEL: func @symbolic_composition_a(%{{.*}}: index, %{{.*}}: index) -> index {
@@ -501,5 +498,31 @@ func @compose_into_affine_load_store(%A : memref<1024xf32>, %u : index) {
     affine.load %A[%copy] : memref<1024xf32>
     // CHECK-NEXT: affine.load %{{.*}}[%[[IV]]]
   }
+  return
+}
+
+// -----
+
+func @affine_min(%arg0 : index, %arg1 : index, %arg2 : index) {
+  %c511 = constant 511 : index
+  %c1 = constant 0 : index
+  %0 = affine.min (d0)[s0] -> (1000, d0 + 512, s0 + 1) (%c1)[%c511]
+  "op0"(%0) : (index) -> ()
+  // CHECK:       %[[CST:.*]] = constant 512 : index
+  // CHECK-NEXT:  "op0"(%[[CST]]) : (index) -> ()
+  // CHECK-NEXT:  return
+  return
+}
+
+// -----
+
+func @affine_min(%arg0 : index, %arg1 : index, %arg2 : index) {
+  %c3 = constant 3 : index
+  %c20 = constant 20 : index
+  %0 = affine.min (d0)[s0] -> (1000, d0 floordiv 4, (s0 mod 5) + 1) (%c20)[%c3]
+  "op0"(%0) : (index) -> ()
+  // CHECK:       %[[CST:.*]] = constant 4 : index
+  // CHECK-NEXT:  "op0"(%[[CST]]) : (index) -> ()
+  // CHECK-NEXT:  return
   return
 }

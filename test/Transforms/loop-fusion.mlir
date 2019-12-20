@@ -321,11 +321,8 @@ func @should_fuse_producer_consumer() {
   // TODO(andydavis) When the fusion pass is run to a fixed-point, it should
   // fuse all three of these loop nests.
   // CHECK:      %{{.*}} = alloc() : memref<1xf32>
-  // CHECK:      %{{.*}} = alloc() : memref<10xf32>
   // CHECK:      affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
-  // CHECK-NEXT: }
-  // CHECK-NEXT: affine.for %{{.*}} = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT:   %{{.*}} = affine.load %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT: }
@@ -769,7 +766,7 @@ func @should_fuse_at_src_depth1_and_dst_depth1() {
       "op2"(%v2) : (f32) -> ()
     }
   }
-  // We can slice iterations of the '%i0' and '%i1' loops in the the source
+  // We can slice iterations of the '%i0' and '%i1' loops in the source
   // loop nest, but slicing at depth 2 and inserting the slice in the
   // destination loop nest at depth2 causes extra computation. Instead,
   // the fusion algorithm should detect that the source loop should be sliced
@@ -1238,7 +1235,6 @@ func @R3_to_R2_reshape() {
 
 // -----
 
-// CHECK-LABEL: func @should_not_fuse_multi_output_producer() {
 func @should_not_fuse_multi_output_producer() {
   %a = alloc() : memref<10xf32>
   %b = alloc() : memref<10xf32>
@@ -1251,6 +1247,7 @@ func @should_not_fuse_multi_output_producer() {
   }
   affine.for %i1 = 0 to 10 {
     %v0 = affine.load %a[%i1] : memref<10xf32>
+    %v1 = affine.load %b[%i1] : memref<10xf32>
   }
 
   // CHECK:       affine.for %{{.*}} = 0 to 10 {
@@ -1258,6 +1255,7 @@ func @should_not_fuse_multi_output_producer() {
   // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  affine.for %{{.*}} = 0 to 10 {
+  // CHECK-NEXT:    %{{.*}} = affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:    %{{.*}} = affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  return
@@ -1483,7 +1481,7 @@ func @should_fuse_at_depth_above_loop_carried_dependence(%arg0: memref<64x4xf32>
   // depth at which we can insert the src loop nest slice into the dst loop
   // lest must be decreased because of a loop carried dependence on loop '%i3'.
   // As a result, the source loop nest is inserted at dst loop nest depth 1,
-  // just above the loop with the carried depenence. In addition, the source
+  // just above the loop with the carried dependence. In addition, the source
   // loop nest iteration bounds on its loop '%i1' are reduced to 1, so the
   // memref size can be reduced to 128x1xf32.
 
@@ -2183,7 +2181,7 @@ func @affine_2mm_fused(%arg0: memref<1024x1024xf32>, %arg1: memref<1024x1024xf32
     }
   }
 
-  // Should fuse MM intialization loops into their consumers, then fuse the
+  // Should fuse MM initialization loops into their consumers, then fuse the
   // two matmul loops together for input reuse on '%arg0/%arg1'.
 
   // CHECK:        affine.for %{{.*}} = 0 to 1024 {
@@ -2264,5 +2262,185 @@ func @affine_2_dependent_mm_fused(%arg0: memref<1024x1024xf32>, %arg1: memref<10
   // CHECK-NEXT:       }
   // CHECK-NEXT:     }
   // CHECK-NEXT:   }
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func @should_fuse_self_dependence_multi_store_producer() {
+func @should_fuse_self_dependence_multi_store_producer() {
+  %m = alloc() : memref<10xf32>
+  %local_m = alloc() : memref<10xf32>
+  %cf7 = constant 7.0 : f32
+
+  affine.for %i0 = 0 to 10 {
+    affine.store %cf7, %local_m[%i0] : memref<10xf32>
+    %v0 = affine.load %local_m[%i0] : memref<10xf32>
+    affine.store %v0, %m[%i0] : memref<10xf32>
+  }
+  affine.for %i1 = 0 to 10 {
+    %v1 = affine.load %m[%i1] : memref<10xf32>
+  }
+  // CHECK:      affine.for %[[i0:.*]] = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, [[LOCAL_M:%.*]][%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   [[v0:%.*]] = affine.load [[LOCAL_M]][%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.store [[v0]], %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT: }
+  // CHECK-NEXT: return
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func @should_fuse_dead_multi_store_producer() {
+func @should_fuse_dead_multi_store_producer() {
+  %m = alloc() : memref<10xf32>
+  %dead_m = alloc() : memref<10xf32>
+  %cf7 = constant 7.0 : f32
+
+  affine.for %i0 = 0 to 10 {
+    affine.store %cf7, %dead_m[%i0] : memref<10xf32>
+    affine.store %cf7, %m[%i0] : memref<10xf32>
+  }
+  affine.for %i1 = 0 to 10 {
+    %v0 = affine.load %m[%i1] : memref<10xf32>
+  }
+  // CHECK:      affine.for %[[i0:.*]] = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT: }
+  // CHECK-NEXT: return
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func @should_fuse_function_live_out_multi_store_producer
+func @should_fuse_function_live_out_multi_store_producer(%live_in_out_m : memref<10xf32>) {
+  %m = alloc() : memref<10xf32>
+  %cf7 = constant 7.0 : f32
+
+  affine.for %i0 = 0 to 10 {
+    affine.store %cf7, %live_in_out_m[%i0] : memref<10xf32>
+    affine.store %cf7, %m[%i0] : memref<10xf32>
+  }
+  affine.for %i1 = 0 to 10 {
+    %v0 = affine.load %m[%i1] : memref<10xf32>
+  }
+  // CHECK:      affine.for %[[i0:.*]] = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT: }
+  // CHECK-NEXT: return
+  return
+}
+
+// -----
+
+// Test case from github bug 777.
+// CHECK-LABEL: func @mul_add_0
+func @mul_add_0(%arg0: memref<3x4xf32>, %arg1: memref<4x3xf32>, %arg2: memref<3x3xf32>, %arg3: memref<3x3xf32>) {
+  %cst = constant 0.000000e+00 : f32
+  %0 = alloc() : memref<3x3xf32>
+  affine.for %arg4 = 0 to 3 {
+    affine.for %arg5 = 0 to 3 {
+      affine.store %cst, %0[%arg4, %arg5] : memref<3x3xf32>
+    }
+  }
+  affine.for %arg4 = 0 to 3 {
+    affine.for %arg5 = 0 to 3 {
+      affine.for %arg6 = 0 to 4 {
+        %1 = affine.load %arg1[%arg6, %arg5] : memref<4x3xf32>
+        %2 = affine.load %arg0[%arg4, %arg6] : memref<3x4xf32>
+        %3 = mulf %2, %1 : f32
+        %4 = affine.load %0[%arg4, %arg5] : memref<3x3xf32>
+        %5 = addf %4, %3 : f32
+        affine.store %5, %0[%arg4, %arg5] : memref<3x3xf32>
+      }
+    }
+  }
+  affine.for %arg4 = 0 to 3 {
+    affine.for %arg5 = 0 to 3 {
+      %6 = affine.load %arg2[%arg4, %arg5] : memref<3x3xf32>
+      %7 = affine.load %0[%arg4, %arg5] : memref<3x3xf32>
+      %8 = addf %7, %6 : f32
+      affine.store %8, %arg3[%arg4, %arg5] : memref<3x3xf32>
+    }
+  }
+  // CHECK:      affine.for %[[i0:.*]] = 0 to 3 {
+  // CHECK-NEXT:   affine.for %[[i1:.*]] = 0 to 3 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0, 0] : memref<1x1xf32>
+  // CHECK-NEXT:     affine.for %[[i2:.*]] = 0 to 4 {
+  // CHECK-NEXT:       affine.load %{{.*}}[%[[i2]], %[[i1]]] : memref<4x3xf32>
+  // CHECK-NEXT:       affine.load %{{.*}}[%[[i0]], %[[i2]]] : memref<3x4xf32>
+  // CHECK-NEXT:       %{{.*}} = mulf %{{.*}}, %{{.*}} : f32
+  // CHECK-NEXT:       affine.load %{{.*}}[0, 0] : memref<1x1xf32>
+  // CHECK-NEXT:       %{{.*}} = addf %{{.*}}, %{{.*}} : f32
+  // CHECK-NEXT:       affine.store %{{.*}}, %{{.*}}[0, 0] : memref<1x1xf32>
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     affine.load %{{.*}}[%[[i0]], %[[i1]]] : memref<3x3xf32>
+  // CHECK-NEXT:     affine.load %{{.*}}[0, 0] : memref<1x1xf32>
+  // CHECK-NEXT:     %{{.*}} = addf %{{.*}}, %{{.*}} : f32
+  // CHECK-NEXT:     affine.store %{{.*}}, %{{.*}}[%[[i0]], %[[i1]]] : memref<3x3xf32>
+  // CHECK-NEXT:   }
+  // CHECK-NEXT: }
+  // CHECK-NEXT: return
+  return
+}
+
+// -----
+
+// Verify that 'fuseProducerConsumerNodes' doesn't fuse a producer loop with
+// a store that has multiple outgoing edges. Sibling loop fusion should not fuse
+// any of these loops due to dependencies on external memref '%a'.
+
+// CHECK-LABEL: func @should_not_fuse_multi_outgoing_edge_store_producer1
+func @should_not_fuse_multi_outgoing_edge_store_producer1(%a : memref<1xf32>) {
+  %cst = constant 0.000000e+00 : f32
+  affine.for %arg0 = 0 to 1 {
+    affine.store %cst, %a[%arg0] : memref<1xf32>
+  }
+
+  affine.for %arg0 = 0 to 1 {
+    %0 = affine.load %a[%arg0] : memref<1xf32>
+  }
+
+  affine.for %arg0 = 0 to 1 {
+    %0 = affine.load %a[%arg0] : memref<1xf32>
+  }
+  // CHECK: affine.for %{{.*}} = 0 to 1
+  // CHECK: affine.for %{{.*}} = 0 to 1
+  // CHECK: affine.for %{{.*}} = 0 to 1
+  return
+}
+
+// -----
+
+// Verify that 'fuseProducerConsumerNodes' fuses a producer loop that: 1) has
+// multiple outgoing edges, 2) producer store has a single outgoing edge.
+// Sibling loop fusion should not fuse any of these loops due to
+// dependencies on external memrefs '%a' and '%b'.
+
+// CHECK-LABEL: func @should_fuse_producer_with_multi_outgoing_edges
+func @should_fuse_producer_with_multi_outgoing_edges(%a : memref<1xf32>, %b : memref<1xf32>) {
+  %cst = constant 0.000000e+00 : f32
+  affine.for %arg0 = 0 to 1 {
+    %0 = affine.load %a[%arg0] : memref<1xf32>
+    affine.store %cst, %b[%arg0] : memref<1xf32>
+  }
+
+  affine.for %arg0 = 0 to 1 {
+    affine.store %cst, %a[%arg0] : memref<1xf32>
+    %1 = affine.load %b[%arg0] : memref<1xf32>
+  }
+  // CHECK: affine.for %{{.*}} = 0 to 1
+  // CHECK-NEXT: affine.load %[[A:.*]][{{.*}}]
+  // CHECK-NEXT: affine.store %{{.*}}, %[[B:.*]][{{.*}}]
+  // CHECK-NEXT: affine.store %{{.*}}, %[[A]]
+  // CHECK-NEXT: affine.load %[[B]]
+  // CHECK-NOT: affine.for %{{.*}}
   return
 }

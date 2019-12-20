@@ -1,5 +1,5 @@
-// RUN: mlir-opt -test-extract-fixed-outer-loops -test-outer-loop-sizes=7 %s | FileCheck %s --check-prefixes=COMMON,TILE_7
-// RUN: mlir-opt -test-extract-fixed-outer-loops -test-outer-loop-sizes=7,4 %s | FileCheck %s --check-prefixes=COMMON,TILE_74
+// RUN: mlir-opt -test-extract-fixed-outer-loops='test-outer-loop-sizes=7' %s | FileCheck %s --check-prefixes=COMMON,TILE_7
+// RUN: mlir-opt -test-extract-fixed-outer-loops='test-outer-loop-sizes=7,4' %s | FileCheck %s --check-prefixes=COMMON,TILE_74
 
 // COMMON-LABEL: @rectangular
 func @rectangular(%arg0: memref<?x?xf32>) {
@@ -84,7 +84,7 @@ func @triangular(%arg0: memref<?x?xf32>) {
   // New outer step (original is %c1).
   // COMMON-NEXT:  %[[step:.*]] = muli %c1, %[[size]]
 
-  // Constant adjustement for inner loop has been hoisted out.
+  // Constant adjustment for inner loop has been hoisted out.
   // TILE_74:      %[[adjustment2:.*]] = subi %c2, %c1_{{.*}}
 
   // New outer loop.

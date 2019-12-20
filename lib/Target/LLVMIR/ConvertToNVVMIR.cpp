@@ -23,19 +23,19 @@
 #include "mlir/Target/NVVMIR.h"
 
 #include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/IR/Function.h"
 #include "mlir/IR/Module.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "mlir/Translation.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ToolOutputFile.h"
 
 using namespace mlir;
 
-namespace {
 static llvm::Value *createIntrinsicCall(llvm::IRBuilder<> &builder,
                                         llvm::Intrinsic::ID intrinsic,
                                         ArrayRef<llvm::Value *> args = {}) {
@@ -44,10 +44,22 @@ static llvm::Value *createIntrinsicCall(llvm::IRBuilder<> &builder,
   return builder.CreateCall(fn, args);
 }
 
+static llvm::Intrinsic::ID getShflBflyIntrinsicId(llvm::Type *resultType,
+                                                  bool withPredicate) {
+  if (withPredicate) {
+    resultType = cast<llvm::StructType>(resultType)->getElementType(0);
+    return resultType->isFloatTy() ? llvm::Intrinsic::nvvm_shfl_sync_bfly_f32p
+                                   : llvm::Intrinsic::nvvm_shfl_sync_bfly_i32p;
+  }
+  return resultType->isFloatTy() ? llvm::Intrinsic::nvvm_shfl_sync_bfly_f32
+                                 : llvm::Intrinsic::nvvm_shfl_sync_bfly_i32;
+}
+
+namespace {
 class ModuleTranslation : public LLVM::ModuleTranslation {
 
 public:
-  explicit ModuleTranslation(ModuleOp module)
+  explicit ModuleTranslation(Operation *module)
       : LLVM::ModuleTranslation(module) {}
   ~ModuleTranslation() override {}
 
@@ -62,15 +74,18 @@ protected:
 };
 } // namespace
 
-std::unique_ptr<llvm::Module> mlir::translateModuleToNVVMIR(ModuleOp m) {
+std::unique_ptr<llvm::Module> mlir::translateModuleToNVVMIR(Operation *m) {
   ModuleTranslation translation(m);
   auto llvmModule =
       LLVM::ModuleTranslation::translateModule<ModuleTranslation>(m);
+  if (!llvmModule)
+    return llvmModule;
 
   // Insert the nvvm.annotations kernel so that the NVVM backend recognizes the
   // function as a kernel.
-  for (FuncOp func : m.getOps<FuncOp>()) {
-    if (!func.getAttrOfType<UnitAttr>(gpu::GPUDialect::getKernelFuncAttrName()))
+  for (auto func :
+       ModuleTranslation::getModuleBody(m).getOps<LLVM::LLVMFuncOp>()) {
+    if (!gpu::GPUDialect::isKernel(func))
       continue;
 
     auto *llvmFunc = llvmModule->getFunction(func.getName());
@@ -90,12 +105,11 @@ std::unique_ptr<llvm::Module> mlir::translateModuleToNVVMIR(ModuleOp m) {
 }
 
 static TranslateFromMLIRRegistration
-    registration("mlir-to-nvvmir",
-                 [](ModuleOp module, llvm::raw_ostream &output) {
-                   auto llvmModule = mlir::translateModuleToNVVMIR(module);
-                   if (!llvmModule)
-                     return failure();
+    registration("mlir-to-nvvmir", [](ModuleOp module, raw_ostream &output) {
+      auto llvmModule = mlir::translateModuleToNVVMIR(module);
+      if (!llvmModule)
+        return failure();
 
-                   llvmModule->print(output, nullptr);
-                   return success();
-                 });
+      llvmModule->print(output, nullptr);
+      return success();
+    });

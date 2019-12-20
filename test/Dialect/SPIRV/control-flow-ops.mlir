@@ -13,6 +13,16 @@ func @branch() -> () {
 
 // -----
 
+func @branch_argument() -> () {
+  %zero = spv.constant 0 : i32
+  // CHECK: spv.Branch ^bb1(%{{.*}}, %{{.*}} : i32, i32)
+  spv.Branch ^next(%zero, %zero: i32, i32)
+^next(%arg0: i32, %arg1: i32):
+  spv.Return
+}
+
+// -----
+
 func @missing_accessor() -> () {
   spv.Branch
   // expected-error @+1 {{expected block name}}
@@ -32,16 +42,6 @@ func @wrong_accessor_count() -> () {
 
 // -----
 
-func @accessor_argument_disallowed() -> () {
-  %zero = spv.constant 0 : i32
-  // expected-error @+1 {{requires zero operands}}
-  "spv.Branch"()[^next(%zero : i32)] : () -> ()
-^next(%arg: i32):
-  spv.Return
-}
-
-// -----
-
 //===----------------------------------------------------------------------===//
 // spv.BranchConditional
 //===----------------------------------------------------------------------===//
@@ -55,6 +55,24 @@ func @cond_branch() -> () {
   spv.Return
 // CHECK: ^bb2
 ^two:
+  spv.Return
+}
+
+// -----
+
+func @cond_branch_argument() -> () {
+  %true = spv.constant true
+  %zero = spv.constant 0 : i32
+  // CHECK: spv.BranchConditional %{{.*}}, ^bb1(%{{.*}}, %{{.*}} : i32, i32), ^bb2
+  spv.BranchConditional %true, ^true1(%zero, %zero: i32, i32), ^false1
+^true1(%arg0: i32, %arg1: i32):
+  // CHECK: spv.BranchConditional %{{.*}}, ^bb3, ^bb4(%{{.*}}, %{{.*}} : i32, i32)
+  spv.BranchConditional %true, ^true2, ^false2(%zero, %zero: i32, i32)
+^false1:
+  spv.Return
+^true2:
+  spv.Return
+^false2(%arg3: i32, %arg4: i32):
   spv.Return
 }
 
@@ -101,18 +119,6 @@ func @wrong_accessor_count() -> () {
   // expected-error @+1 {{must have exactly two successors}}
   "spv.BranchConditional"(%true)[^one] : (i1) -> ()
 ^one:
-  spv.Return
-^two:
-  spv.Return
-}
-
-// -----
-
-func @accessor_argment_disallowed() -> () {
-  %true = spv.constant true
-  // expected-error @+1 {{requires a single operand}}
-  "spv.BranchConditional"(%true)[^one(%true : i1), ^two] : (i1) -> ()
-^one(%arg : i1):
   spv.Return
 ^two:
   spv.Return
@@ -404,12 +410,34 @@ func @only_entry_and_continue_branch_to_header() -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
-// spv.merge
+// spv._merge
 //===----------------------------------------------------------------------===//
 
 func @merge() -> () {
-  // expected-error @+1 {{expects parent op 'spv.loop'}}
+  // expected-error @+1 {{expected parent op to be 'spv.selection' or 'spv.loop'}}
   spv._merge
+}
+
+// -----
+
+func @only_allowed_in_last_block(%cond : i1) -> () {
+  %zero = spv.constant 0: i32
+  %one = spv.constant 1: i32
+  %var = spv.Variable init(%zero) : !spv.ptr<i32, Function>
+
+  spv.selection {
+    spv.BranchConditional %cond, ^then, ^merge
+
+  ^then:
+    spv.Store "Function" %var, %one : i32
+    // expected-error @+1 {{can only be used in the last block of 'spv.selection' or 'spv.loop'}}
+    spv._merge
+
+  ^merge:
+    spv._merge
+  }
+
+  spv.Return
 }
 
 // -----
@@ -421,7 +449,7 @@ func @only_allowed_in_last_block() -> () {
   ^header:
     spv.BranchConditional %true, ^body, ^merge
   ^body:
-    // expected-error @+1 {{can only be used in the last block of 'spv.loop'}}
+    // expected-error @+1 {{can only be used in the last block of 'spv.selection' or 'spv.loop'}}
     spv._merge
   ^continue:
     spv.Branch ^header
@@ -436,6 +464,38 @@ func @only_allowed_in_last_block() -> () {
 //===----------------------------------------------------------------------===//
 // spv.Return
 //===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @in_selection
+func @in_selection(%cond : i1) -> () {
+  spv.selection {
+    spv.BranchConditional %cond, ^then, ^merge
+  ^then:
+    // CHECK: spv.Return
+    spv.Return
+  ^merge:
+    spv._merge
+  }
+  spv.Return
+}
+
+// CHECK-LABEL: func @in_loop
+func @in_loop(%cond : i1) -> () {
+  spv.loop {
+    spv.Branch ^header
+  ^header:
+    spv.BranchConditional %cond, ^body, ^merge
+  ^body:
+    // CHECK: spv.Return
+    spv.Return
+  ^continue:
+    spv.Branch ^header
+  ^merge:
+    spv._merge
+  }
+  spv.Return
+}
+
+// -----
 
 "foo.function"() ({
   // expected-error @+1 {{op must appear in a 'func' block}}
@@ -464,6 +524,40 @@ func @ret_val() -> (i32) {
   spv.ReturnValue %0 : i32
 }
 
+// CHECK-LABEL: func @in_selection
+func @in_selection(%cond : i1) -> (i32) {
+  spv.selection {
+    spv.BranchConditional %cond, ^then, ^merge
+  ^then:
+    %zero = spv.constant 0 : i32
+    // CHECK: spv.ReturnValue
+    spv.ReturnValue %zero : i32
+  ^merge:
+    spv._merge
+  }
+  %one = spv.constant 1 : i32
+  spv.ReturnValue %one : i32
+}
+
+// CHECK-LABEL: func @in_loop
+func @in_loop(%cond : i1) -> (i32) {
+  spv.loop {
+    spv.Branch ^header
+  ^header:
+    spv.BranchConditional %cond, ^body, ^merge
+  ^body:
+    %zero = spv.constant 0 : i32
+    // CHECK: spv.ReturnValue
+    spv.ReturnValue %zero : i32
+  ^continue:
+    spv.Branch ^header
+  ^merge:
+    spv._merge
+  }
+  %one = spv.constant 1 : i32
+  spv.ReturnValue %one : i32
+}
+
 // -----
 
 "foo.function"() ({
@@ -486,4 +580,133 @@ func @value_type_mismatch() -> (f32) {
   %0 = spv.constant 42 : i32
   // expected-error @+1 {{return value's type ('i32') mismatch with function's result type ('f32')}}
   spv.ReturnValue %0 : i32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.selection
+//===----------------------------------------------------------------------===//
+
+func @selection(%cond: i1) -> () {
+  %zero = spv.constant 0: i32
+  %one = spv.constant 1: i32
+  %var = spv.Variable init(%zero) : !spv.ptr<i32, Function>
+
+  // CHECK: spv.selection {
+  spv.selection {
+    // CHECK-NEXT: spv.BranchConditional %{{.*}}, ^bb1, ^bb2
+    spv.BranchConditional %cond, ^then, ^merge
+
+  // CHECK: ^bb1
+  ^then:
+    spv.Store "Function" %var, %one : i32
+    // CHECK: spv.Branch ^bb2
+    spv.Branch ^merge
+
+  // CHECK: ^bb2
+  ^merge:
+    // CHECK-NEXT: spv._merge
+    spv._merge
+  }
+
+  spv.Return
+}
+
+// -----
+
+func @selection(%cond: i1) -> () {
+  %zero = spv.constant 0: i32
+  %one = spv.constant 1: i32
+  %two = spv.constant 2: i32
+  %var = spv.Variable init(%zero) : !spv.ptr<i32, Function>
+
+  // CHECK: spv.selection {
+  spv.selection {
+    // CHECK-NEXT: spv.BranchConditional %{{.*}}, ^bb1, ^bb2
+    spv.BranchConditional %cond, ^then, ^else
+
+  // CHECK: ^bb1
+  ^then:
+    spv.Store "Function" %var, %one : i32
+    // CHECK: spv.Branch ^bb3
+    spv.Branch ^merge
+
+  // CHECK: ^bb2
+  ^else:
+    spv.Store "Function" %var, %two : i32
+    // CHECK: spv.Branch ^bb3
+    spv.Branch ^merge
+
+  // CHECK: ^bb3
+  ^merge:
+    // CHECK-NEXT: spv._merge
+    spv._merge
+  }
+
+  spv.Return
+}
+
+// -----
+
+// CHECK-LABEL: @empty_region
+func @empty_region() -> () {
+  // CHECK: spv.selection
+  spv.selection {
+  }
+  return
+}
+
+// -----
+
+func @wrong_merge_block() -> () {
+  // expected-error @+1 {{last block must be the merge block with only one 'spv._merge' op}}
+  spv.selection {
+    spv.Return
+  }
+  return
+}
+
+// -----
+
+func @missing_entry_block() -> () {
+  // expected-error @+1 {{must have a selection header block}}
+  spv.selection {
+    spv._merge
+  }
+  return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.Unreachable
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @unreachable_no_pred
+func @unreachable_no_pred() {
+    spv.Return
+
+  ^next:
+    // CHECK: spv.Unreachable
+    spv.Unreachable
+}
+
+// CHECK-LABEL: func @unreachable_with_pred
+func @unreachable_with_pred() {
+    spv.Return
+
+  ^parent:
+    spv.Branch ^unreachable
+
+  ^unreachable:
+    // CHECK: spv.Unreachable
+    spv.Unreachable
+}
+
+// -----
+
+func @unreachable() {
+  // expected-error @+1 {{cannot be used in reachable block}}
+  spv.Unreachable
 }

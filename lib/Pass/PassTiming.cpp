@@ -29,7 +29,7 @@
 using namespace mlir;
 using namespace mlir::detail;
 
-constexpr llvm::StringLiteral kPassTimingDescription =
+constexpr StringLiteral kPassTimingDescription =
     "... Pass execution timing report ...";
 
 namespace {
@@ -93,8 +93,8 @@ struct Timer {
 
   /// Returns the total time for this timer in seconds.
   TimeRecord getTotalTime() {
-    // If we have a valid wall time, then we directly compute the seconds.
-    if (wallTime.count()) {
+    // If this is a pass or analysis timer, use the recorded time directly.
+    if (kind == TimerKind::PassOrAnalysis) {
       return TimeRecord(
           std::chrono::duration_cast<std::chrono::duration<double>>(wallTime)
               .count(),
@@ -102,7 +102,7 @@ struct Timer {
               .count());
     }
 
-    // Otheriwse, accumulate the timing from each of the children.
+    // Otherwise, accumulate the timing from each of the children.
     TimeRecord totalTime;
     for (auto &child : children)
       totalTime += child.second->getTotalTime();
@@ -120,7 +120,7 @@ struct Timer {
     mergeChildren(std::move(other.children));
   }
 
-  /// Merge the timer chilren in 'otherChildren' with the children of this
+  /// Merge the timer children in 'otherChildren' with the children of this
   /// timer.
   void mergeChildren(ChildrenMap &&otherChildren) {
     // Check for an empty children list.
@@ -130,7 +130,7 @@ struct Timer {
     }
 
     // Pipeline merges are handled separately as the children are merged
-    // lexographically.
+    // lexicographically.
     if (kind == TimerKind::Pipeline) {
       assert(children.size() == otherChildren.size() &&
              "pipeline merge requires the same number of children");
@@ -169,24 +169,23 @@ struct Timer {
 };
 
 struct PassTiming : public PassInstrumentation {
-  PassTiming(PassTimingDisplayMode displayMode) : displayMode(displayMode) {}
+  PassTiming(PassDisplayMode displayMode) : displayMode(displayMode) {}
   ~PassTiming() override { print(); }
 
   /// Setup the instrumentation hooks.
   void runBeforePipeline(const OperationName &name,
-                         uint64_t parentThreadID) override;
+                         const PipelineParentInfo &parentInfo) override;
   void runAfterPipeline(const OperationName &name,
-                        uint64_t parentThreadID) override;
+                        const PipelineParentInfo &parentInfo) override;
   void runBeforePass(Pass *pass, Operation *) override { startPassTimer(pass); }
   void runAfterPass(Pass *pass, Operation *) override;
   void runAfterPassFailed(Pass *pass, Operation *op) override {
     runAfterPass(pass, op);
   }
-  void runBeforeAnalysis(llvm::StringRef name, AnalysisID *id,
-                         Operation *) override {
+  void runBeforeAnalysis(StringRef name, AnalysisID *id, Operation *) override {
     startAnalysisTimer(name, id);
   }
-  void runAfterAnalysis(llvm::StringRef, AnalysisID *, Operation *) override;
+  void runAfterAnalysis(StringRef, AnalysisID *, Operation *) override;
 
   /// Print and clear the timing results.
   void print();
@@ -195,7 +194,7 @@ struct PassTiming : public PassInstrumentation {
   void startPassTimer(Pass *pass);
 
   /// Start a new timer for the given analysis.
-  void startAnalysisTimer(llvm::StringRef name, AnalysisID *id);
+  void startAnalysisTimer(StringRef name, AnalysisID *id);
 
   /// Pop the last active timer for the current thread.
   Timer *popLastActiveTimer() {
@@ -242,18 +241,17 @@ struct PassTiming : public PassInstrumentation {
   DenseMap<uint64_t, SmallVector<Timer *, 4>> activeThreadTimers;
 
   /// The display mode to use when printing the timing results.
-  PassTimingDisplayMode displayMode;
+  PassDisplayMode displayMode;
 
   /// A mapping of pipeline timers that need to be merged into the parent
-  /// collection. The timers are mapped to the thread id of the parent thread to
-  /// merge into.
-  DenseMap<uint64_t, SmallVector<Timer::ChildrenMap::value_type, 4>>
+  /// collection. The timers are mapped to the parent info to merge into.
+  DenseMap<PipelineParentInfo, SmallVector<Timer::ChildrenMap::value_type, 4>>
       pipelinesToMerge;
 };
 } // end anonymous namespace
 
 void PassTiming::runBeforePipeline(const OperationName &name,
-                                   uint64_t parentThreadID) {
+                                   const PipelineParentInfo &parentInfo) {
   // We don't actually want to time the piplelines, they gather their total
   // from their held passes.
   getTimer(name.getAsOpaquePointer(), TimerKind::Pipeline,
@@ -261,7 +259,7 @@ void PassTiming::runBeforePipeline(const OperationName &name,
 }
 
 void PassTiming::runAfterPipeline(const OperationName &name,
-                                  uint64_t parentThreadID) {
+                                  const PipelineParentInfo &parentInfo) {
   // Pop the timer for the pipeline.
   auto tid = llvm::get_threadid();
   auto &activeTimers = activeThreadTimers[tid];
@@ -270,7 +268,7 @@ void PassTiming::runAfterPipeline(const OperationName &name,
 
   // If the current thread is the same as the parent, there is nothing left to
   // do.
-  if (tid == parentThreadID)
+  if (tid == parentInfo.parentThreadID)
     return;
 
   // Otherwise, mark the pipeline timer for merging into the correct parent
@@ -280,7 +278,7 @@ void PassTiming::runAfterPipeline(const OperationName &name,
   assert(parentTimer->children.size() == 1 &&
          parentTimer->children.count(name.getAsOpaquePointer()) &&
          "expected a single pipeline timer");
-  pipelinesToMerge[parentThreadID].push_back(
+  pipelinesToMerge[parentInfo].push_back(
       std::move(*parentTimer->children.begin()));
   rootTimers.erase(tid);
 }
@@ -290,15 +288,8 @@ void PassTiming::startPassTimer(Pass *pass) {
   auto kind = isAdaptorPass(pass) ? TimerKind::PipelineCollection
                                   : TimerKind::PassOrAnalysis;
   Timer *timer = getTimer(pass, kind, [pass]() -> std::string {
-    if (auto *adaptor = getAdaptorPassBase(pass)) {
-      std::string name = "Pipeline Collection : [";
-      llvm::raw_string_ostream os(name);
-      interleaveComma(adaptor->getPassManagers(), os, [&](OpPassManager &pm) {
-        os << '\'' << pm.getOpName() << '\'';
-      });
-      os << ']';
-      return os.str();
-    }
+    if (auto *adaptor = getAdaptorPassBase(pass))
+      return adaptor->getName();
     return pass->getName();
   });
 
@@ -309,7 +300,7 @@ void PassTiming::startPassTimer(Pass *pass) {
 }
 
 /// Start a new timer for the given analysis.
-void PassTiming::startAnalysisTimer(llvm::StringRef name, AnalysisID *id) {
+void PassTiming::startAnalysisTimer(StringRef name, AnalysisID *id) {
   Timer *timer = getTimer(id, TimerKind::PassOrAnalysis,
                           [name] { return "(A) " + name.str(); });
   timer->start();
@@ -322,7 +313,7 @@ void PassTiming::runAfterPass(Pass *pass, Operation *) {
   // If this is an OpToOpPassAdaptorParallel, then we need to merge in the
   // timing data for the pipelines running on other threads.
   if (isa<OpToOpPassAdaptorParallel>(pass)) {
-    auto toMerge = pipelinesToMerge.find(llvm::get_threadid());
+    auto toMerge = pipelinesToMerge.find({llvm::get_threadid(), pass});
     if (toMerge != pipelinesToMerge.end()) {
       for (auto &it : toMerge->second)
         timer->mergeChild(std::move(it));
@@ -331,23 +322,23 @@ void PassTiming::runAfterPass(Pass *pass, Operation *) {
     return;
   }
 
-  // Adapator passes aren't timed directly, so we don't need to stop their
+  // Adaptor passes aren't timed directly, so we don't need to stop their
   // timers.
   if (!isAdaptorPass(pass))
     timer->stop();
 }
 
 /// Stop a timer.
-void PassTiming::runAfterAnalysis(llvm::StringRef, AnalysisID *, Operation *) {
+void PassTiming::runAfterAnalysis(StringRef, AnalysisID *, Operation *) {
   popLastActiveTimer()->stop();
 }
 
 /// Utility to print the timer heading information.
-static void printTimerHeader(llvm::raw_ostream &os, TimeRecord total) {
+static void printTimerHeader(raw_ostream &os, TimeRecord total) {
   os << "===" << std::string(73, '-') << "===\n";
   // Figure out how many spaces to description name.
-  unsigned Padding = (80 - kPassTimingDescription.size()) / 2;
-  os.indent(Padding) << kPassTimingDescription << '\n';
+  unsigned padding = (80 - kPassTimingDescription.size()) / 2;
+  os.indent(padding) << kPassTimingDescription << '\n';
   os << "===" << std::string(73, '-') << "===\n";
 
   // Print the total time followed by the section headers.
@@ -380,10 +371,10 @@ void PassTiming::print() {
 
   // Defer to a specialized printer for each display mode.
   switch (displayMode) {
-  case PassTimingDisplayMode::List:
+  case PassDisplayMode::List:
     printResultsAsList(*os, rootTimer.get(), totalTime);
     break;
-  case PassTimingDisplayMode::Pipeline:
+  case PassDisplayMode::Pipeline:
     printResultsAsPipeline(*os, rootTimer.get(), totalTime);
     break;
   }
@@ -473,7 +464,7 @@ void PassTiming::printResultsAsPipeline(raw_ostream &os, Timer *root,
 
 /// Add an instrumentation to time the execution of passes and the computation
 /// of analyses.
-void PassManager::enableTiming(PassTimingDisplayMode displayMode) {
+void PassManager::enableTiming(PassDisplayMode displayMode) {
   // Check if pass timing is already enabled.
   if (passTiming)
     return;

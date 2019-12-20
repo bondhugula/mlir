@@ -64,70 +64,83 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
     cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")));
 
-static cl::opt<bool> EnableOpt("opt", cl::desc("Enable optimizations"));
+static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
 /// Returns a Toy AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<toy::ModuleAST> parseInputFile(llvm::StringRef filename) {
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(filename);
-  if (std::error_code EC = FileOrErr.getError()) {
-    llvm::errs() << "Could not open input file: " << EC.message() << "\n";
+  if (std::error_code ec = fileOrErr.getError()) {
+    llvm::errs() << "Could not open input file: " << ec.message() << "\n";
     return nullptr;
   }
-  auto buffer = FileOrErr.get()->getBuffer();
+  auto buffer = fileOrErr.get()->getBuffer();
   LexerBuffer lexer(buffer.begin(), buffer.end(), filename);
   Parser parser(lexer);
-  return parser.ParseModule();
+  return parser.parseModule();
 }
 
-mlir::LogicalResult optimize(mlir::ModuleOp module) {
-  mlir::PassManager pm(module.getContext());
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(createShapeInferencePass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  // Apply any generic pass manager command line options.
-  applyPassManagerCLOptions(pm);
+int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
+             mlir::OwningModuleRef &module) {
+  // Handle '.toy' input to the compiler.
+  if (inputType != InputType::MLIR &&
+      !llvm::StringRef(inputFilename).endswith(".mlir")) {
+    auto moduleAST = parseInputFile(inputFilename);
+    if (!moduleAST)
+      return 6;
+    module = mlirGen(context, *moduleAST);
+    return !module ? 1 : 0;
+  }
 
-  return pm.run(module);
+  // Otherwise, the input is '.mlir'.
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+  if (std::error_code EC = fileOrErr.getError()) {
+    llvm::errs() << "Could not open input file: " << EC.message() << "\n";
+    return -1;
+  }
+
+  // Parse the input mlir.
+  sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
+  module = mlir::parseSourceFile(sourceMgr, &context);
+  if (!module) {
+    llvm::errs() << "Error can't load file " << inputFilename << "\n";
+    return 3;
+  }
+  return 0;
 }
 
 int dumpMLIR() {
-  // Register our Dialect with MLIR
-  mlir::registerDialect<ToyDialect>();
+  // Register our Dialect with MLIR.
+  mlir::registerDialect<mlir::toy::ToyDialect>();
 
   mlir::MLIRContext context;
   mlir::OwningModuleRef module;
-  if (inputType == InputType::MLIR ||
-      llvm::StringRef(inputFilename).endswith(".mlir")) {
-    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-        llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
-    if (std::error_code EC = fileOrErr.getError()) {
-      llvm::errs() << "Could not open input file: " << EC.message() << "\n";
-      return -1;
-    }
-    llvm::SourceMgr sourceMgr;
-    sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
-    module = mlir::parseSourceFile(sourceMgr, &context);
-    if (!module) {
-      llvm::errs() << "Error can't load file " << inputFilename << "\n";
-      return 3;
-    }
-    if (failed(mlir::verify(*module))) {
-      llvm::errs() << "Error verifying MLIR module\n";
+  llvm::SourceMgr sourceMgr;
+  mlir::SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
+  if (int error = loadMLIR(sourceMgr, context, module))
+    return error;
+
+  if (enableOpt) {
+    mlir::PassManager pm(&context);
+    // Apply any generic pass manager command line options and run the pipeline.
+    applyPassManagerCLOptions(pm);
+
+    // Inline all functions into main and then delete them.
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(mlir::toy::createDeadFunctionEliminationPass());
+
+    // Now that there is only one function, we can infer the shapes of each of
+    // the operations.
+    mlir::OpPassManager &optPM = pm.nest<mlir::FuncOp>();
+    optPM.addPass(mlir::toy::createShapeInferencePass());
+    optPM.addPass(mlir::createCanonicalizerPass());
+    optPM.addPass(mlir::createCSEPass());
+
+    if (mlir::failed(pm.run(*module)))
       return 4;
-    }
-  } else {
-    auto moduleAST = parseInputFile(inputFilename);
-    module = mlirGen(context, *moduleAST);
   }
-  if (!module)
-    return 1;
-  if (EnableOpt) {
-    if (failed(optimize(*module))) {
-      llvm::errs() << "Module optimization failed\n";
-      return 7;
-    }
-  }
+
   module->dump();
   return 0;
 }

@@ -36,24 +36,23 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/SourceMgr.h"
 
-namespace mlir {
-namespace ROCDL {
+using namespace mlir;
+using namespace ROCDL;
 
 //===----------------------------------------------------------------------===//
 // Printing/parsing for ROCDL ops
 //===----------------------------------------------------------------------===//
 
 static void printROCDLOp(OpAsmPrinter &p, Operation *op) {
-  p << op->getName() << " ";
-  p.printOperands(op->getOperands());
+  p << op->getName() << " " << op->getOperands();
   if (op->getNumResults() > 0)
-    interleaveComma(op->getResultTypes(), p << " : ");
+    p << " : " << op->getResultTypes();
 }
 
 // <operation> ::= `rocdl.XYZ` : type
 static ParseResult parseROCDLOp(OpAsmParser &parser, OperationState &result) {
   Type type;
-  return failure(parser.parseOptionalAttributeDict(result.attributes) ||
+  return failure(parser.parseOptionalAttrDict(result.attributes) ||
                  parser.parseColonType(type) ||
                  parser.addTypeToList(type, result.types));
 }
@@ -73,10 +72,11 @@ ROCDLDialect::ROCDLDialect(MLIRContext *context) : Dialect("rocdl", context) {
   allowUnknownOperations();
 }
 
+namespace mlir {
+namespace ROCDL {
 #define GET_OP_CLASSES
 #include "mlir/Dialect/LLVMIR/ROCDLOps.cpp.inc"
-
-static DialectRegistration<ROCDLDialect> rocdlDialect;
-
 } // namespace ROCDL
 } // namespace mlir
+
+static DialectRegistration<ROCDLDialect> rocdlDialect;

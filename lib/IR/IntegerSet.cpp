@@ -45,7 +45,7 @@ unsigned IntegerSet::getNumInequalities() const {
 }
 
 bool IntegerSet::isEmptyIntegerSet() const {
-  // This will only work if uniqui'ing is on.
+  // This will only work if uniquing is on.
   static_assert(kUniquingThreshold >= 1,
                 "uniquing threshold should be at least one");
   return *this == getEmptySet(set->dimCount, set->symbolCount, getContext());
@@ -73,8 +73,7 @@ MLIRContext *IntegerSet::getContext() const {
 
 /// Walk all of the AffineExpr's in this set. Each node in an expression
 /// tree is visited in postorder.
-void IntegerSet::walkExprs(
-    llvm::function_ref<void(AffineExpr)> callback) const {
+void IntegerSet::walkExprs(function_ref<void(AffineExpr)> callback) const {
   for (auto expr : getConstraints())
     expr.walk(callback);
 }

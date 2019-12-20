@@ -52,15 +52,13 @@ static llvm::cl::list<unsigned>
                 llvm::cl::desc("Tile sizes by which to tile linalg operations"),
                 llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated,
                 llvm::cl::cat(clOptionsCategory));
-static llvm::cl::opt<bool> clPromoteFullTileViews(
-    "linalg-tile-promote-full-tile-views",
-    llvm::cl::desc("Create scoped local buffers for tiled views "),
-    llvm::cl::init(false), llvm::cl::cat(clOptionsCategory));
 
 static bool isZero(Value *v) {
   return isa_and_nonnull<ConstantIndexOp>(v->getDefiningOp()) &&
          cast<ConstantIndexOp>(v->getDefiningOp()).getValue() == 0;
 }
+
+using LoopIndexToRangeIndexMap = DenseMap<int, int>;
 
 // Creates a number of ranges equal to the number of non-zero in `tileSizes`.
 // One for each loop of the LinalgOp that is tiled. The `tileSizes` argument has
@@ -68,22 +66,28 @@ static bool isZero(Value *v) {
 // particular loop is not tiled. This convention simplifies implementations by
 // avoiding affine map manipulations.
 // The returned ranges correspond to the loop ranges, in the proper order, that
-// are tiled and for which new loops will be created.
-static SmallVector<SubViewOp::Range, 4>
+// are tiled and for which new loops will be created. Also the function returns
+// a map from loop indices of the LinalgOp to the corresponding non-empty range
+// indices of newly created loops.
+static std::tuple<SmallVector<SubViewOp::Range, 4>, LoopIndexToRangeIndexMap>
 makeTiledLoopRanges(OpBuilder &b, Location loc, AffineMap map,
                     ArrayRef<Value *> allViewSizes,
-                    ArrayRef<Value *> allTileSizes, OperationFolder &folder) {
+                    ArrayRef<Value *> allTileSizes, OperationFolder *folder) {
   assert(allTileSizes.size() == map.getNumResults());
   // Apply `map` to get view sizes in loop order.
   auto viewSizes = applyMapToValues(b, loc, map, allViewSizes, folder);
   SmallVector<Value *, 4> tileSizes(allTileSizes.begin(), allTileSizes.end());
 
   // Traverse the tile sizes, which are in loop order, erase zeros everywhere.
-  for (int idx = tileSizes.size() - 1; idx >= 0; --idx) {
-    if (isZero(tileSizes[idx])) {
-      viewSizes.erase(viewSizes.begin() + idx);
-      tileSizes.erase(tileSizes.begin() + idx);
+  LoopIndexToRangeIndexMap loopIndexToRangeIndex;
+  for (int idx = 0, e = tileSizes.size(), zerosCount = 0; idx < e; ++idx) {
+    if (isZero(tileSizes[idx - zerosCount])) {
+      viewSizes.erase(viewSizes.begin() + idx - zerosCount);
+      tileSizes.erase(tileSizes.begin() + idx - zerosCount);
+      ++zerosCount;
+      continue;
     }
+    loopIndexToRangeIndex[idx] = idx - zerosCount;
   }
 
   // Create a new range with the applied tile sizes.
@@ -92,10 +96,11 @@ makeTiledLoopRanges(OpBuilder &b, Location loc, AffineMap map,
     res.push_back(SubViewOp::Range{constant_index(folder, 0), viewSizes[idx],
                                    tileSizes[idx]});
   }
-  return res;
+  return std::make_tuple(res, loopIndexToRangeIndex);
 }
 
 namespace {
+
 // Helper visitor to determine whether an AffineExpr is tiled.
 // This is achieved by traversing every AffineDimExpr with position `pos` and
 // checking whether the corresponding `tileSizes[pos]` is non-zero.
@@ -116,12 +121,103 @@ struct TileCheck : public AffineExprVisitor<TileCheck> {
     visit(expr.getRHS());
     if (expr.getKind() == mlir::AffineExprKind::Mul)
       assert(expr.getRHS().cast<AffineConstantExpr>().getValue() > 0 &&
-             "nonpositive multipliying coefficient");
+             "nonpositive multiplying coefficient");
   }
   bool isTiled;
   ArrayRef<Value *> tileSizes;
 };
+
 } // namespace
+
+// IndexedGenericOp explicitly uses induction variables in the loop body. The
+// values of the indices that are used in the loop body for any given access of
+// input/output memref before `subview` op was applied should be invariant with
+// respect to tiling.
+//
+// Therefore, if the operation is tiled, we have to transform the indices
+// accordingly, i.e. offset them by the values of the corresponding induction
+// variables that are captured implicitly in the body of the op.
+//
+// Example. `linalg.indexed_generic` before tiling:
+//
+// #id_2d = (i, j) -> (i, j)
+// #pointwise_2d_trait = {
+//   indexing_maps = [#id_2d, #id_2d],
+//   iterator_types = ["parallel", "parallel"],
+//   n_views = [1, 1]
+// }
+// linalg.indexed_generic #pointwise_2d_trait %operand, %result {
+//   ^bb0(%i: index, %j: index, %operand_in: f32, %result_in: f32):
+//     <some operations that use %i, %j>
+// }: memref<50x100xf32>, memref<50x100xf32>
+//
+// After tiling pass with tiles sizes 10 and 25:
+//
+// #strided = (i, j)[s0, s1, s2] -> (i * s1 + s0 + j * s2)
+//
+// %c1 = constant 1 : index
+// %c0 = constant 0 : index
+// %c25 = constant 25 : index
+// %c10 = constant 10 : index
+// operand_dim_0 = dim %operand, 0 : memref<50x100xf32>
+// operand_dim_1 = dim %operand, 1 : memref<50x100xf32>
+// loop.for %k = %c0 to operand_dim_0 step %c10 {
+//   loop.for %l = %c0 to operand_dim_1 step %c25 {
+//     %4 = std.subview %operand[%k, %l][%c10, %c25][%c1, %c1]
+//       : memref<50x100xf32> to memref<?x?xf32, #strided>
+//     %5 = std.subview %result[%k, %l][%c10, %c25][%c1, %c1]
+//       : memref<50x100xf32> to memref<?x?xf32, #strided>
+//     linalg.indexed_generic pointwise_2d_trait %4, %5 {
+//     ^bb0(%i: index, %j: index, %operand_in: f32, %result_in: f32):
+//       // Indices `k` and `l` are implicitly captured in the body.
+//       %transformed_i = addi %i, %k : index // index `i` is offset by %k
+//       %transformed_j = addi %j, %l : index // index `j` is offset by %l
+//       // Every use of %i, %j is replaced with %transformed_i, %transformed_j
+//       <some operations that use %transformed_i, %transformed_j>
+//     }: memref<?x?xf32, #strided>, memref<?x?xf32, #strided>
+//   }
+// }
+//
+// TODO(pifon, ntv): Investigate whether mixing implicit and explicit indices
+// does not lead to losing information.
+void transformIndexedGenericOpIndices(
+    OpBuilder &b, LinalgOp op, ArrayRef<ValueHandle *> pivs,
+    const LoopIndexToRangeIndexMap &loopIndexToRangeIndex) {
+  auto indexedGenericOp = dyn_cast<IndexedGenericOp>(op.getOperation());
+  if (!indexedGenericOp)
+    return;
+
+  // `linalg.indexed_generic` comes in two flavours. One has a region with a
+  // single block that defines the loop body. The other has a `fun` attribute
+  // that refers to an existing function symbol. The `fun` function call will be
+  // inserted in the loop body in that case.
+  //
+  // TODO(pifon): Add support for `linalg.indexed_generic` with `fun` attribute.
+  auto &region = indexedGenericOp.region();
+  if (region.empty()) {
+    indexedGenericOp.emitError("op expected a region");
+    return;
+  }
+  auto &block = region.getBlocks().front();
+
+  OpBuilder::InsertionGuard g(b);
+  b.setInsertionPointToStart(&block);
+  for (unsigned i = 0; i < indexedGenericOp.getNumLoops(); ++i) {
+    auto rangeIndex = loopIndexToRangeIndex.find(i);
+    if (rangeIndex == loopIndexToRangeIndex.end())
+      continue;
+    Value *oldIndex = block.getArgument(i);
+    // Offset the index argument `i` by the value of the corresponding induction
+    // variable and replace all uses of the previous value.
+    Value *newIndex = b.create<AddIOp>(indexedGenericOp.getLoc(), oldIndex,
+                                       pivs[rangeIndex->second]->getValue());
+    for (auto &use : oldIndex->getUses()) {
+      if (use.getOwner() == newIndex->getDefiningOp())
+        continue;
+      use.set(newIndex);
+    }
+  }
+}
 
 static bool isTiled(AffineExpr expr, ArrayRef<Value *> tileSizes) {
   if (!expr)
@@ -145,7 +241,7 @@ static bool isTiled(AffineMap map, ArrayRef<Value *> tileSizes) {
 static SmallVector<Value *, 4>
 makeTiledViews(OpBuilder &b, Location loc, LinalgOp linalgOp,
                ArrayRef<Value *> ivs, ArrayRef<Value *> tileSizes,
-               ArrayRef<Value *> viewSizes, OperationFolder &folder) {
+               ArrayRef<Value *> viewSizes, OperationFolder *folder) {
   assert(ivs.size() == static_cast<size_t>(llvm::count_if(
                            llvm::make_range(tileSizes.begin(), tileSizes.end()),
                            [](Value *v) { return !isZero(v); })) &&
@@ -157,16 +253,11 @@ makeTiledViews(OpBuilder &b, Location loc, LinalgOp linalgOp,
 
   // Construct (potentially temporary) mins and maxes on which to apply maps
   // that define tile subviews.
-  SmallVector<Value *, 8> mins, maxes;
+  SmallVector<Value *, 8> lbs, subViewSizes;
   for (unsigned idx = 0, idxIvs = 0, e = tileSizes.size(); idx < e; ++idx) {
-    if (isZero(tileSizes[idx])) {
-      mins.push_back(constant_index(folder, 0));
-      maxes.push_back(viewSizes[idx]);
-    } else {
-      ValueHandle lb(ivs[idxIvs++]), step(tileSizes[idx]);
-      mins.push_back(lb);
-      maxes.push_back(lb + step);
-    }
+    bool isTiled = !isZero(tileSizes[idx]);
+    lbs.push_back(isTiled ? ivs[idxIvs++] : (Value *)constant_index(folder, 0));
+    subViewSizes.push_back(isTiled ? tileSizes[idx] : viewSizes[idx]);
   }
 
   auto *op = linalgOp.getOperation();
@@ -177,7 +268,7 @@ makeTiledViews(OpBuilder &b, Location loc, LinalgOp linalgOp,
   for (unsigned viewIndex = 0; viewIndex < linalgOp.getNumInputsAndOutputs();
        ++viewIndex) {
     Value *view = *(viewIteratorBegin + viewIndex);
-    unsigned viewRank = view->getType().cast<ViewType>().getRank();
+    unsigned rank = view->getType().cast<MemRefType>().getRank();
     auto map = loopToOperandRangesMaps(linalgOp)[viewIndex];
     // If the view is not tiled, we can use it as is.
     if (!isTiled(map, tileSizes)) {
@@ -186,177 +277,47 @@ makeTiledViews(OpBuilder &b, Location loc, LinalgOp linalgOp,
     }
 
     // Construct a new subview for the tile.
-    SmallVector<SubViewOp::Range, 4> subViewOperands;
-    subViewOperands.reserve(viewRank * 3);
-    for (unsigned r = 0; r < viewRank; ++r) {
+    SmallVector<Value *, 4> offsets, sizes, strides;
+    offsets.reserve(rank);
+    sizes.reserve(rank);
+    strides.reserve(rank);
+    for (unsigned r = 0; r < rank; ++r) {
       if (!isTiled(map.getSubMap({r}), tileSizes)) {
-        subViewOperands.push_back(SubViewOp::Range{
-            constant_index(folder, 0), linalg::intrinsics::dim(view, r),
-            constant_index(folder, 1)});
+        offsets.push_back(constant_index(folder, 0));
+        sizes.push_back(dim(view, r));
+        strides.push_back(constant_index(folder, 1));
         continue;
       }
 
-      auto m = map.getSubMap({r});
-      auto *min = applyMapToValues(b, loc, m, mins, folder).front();
-      auto *max = applyMapToValues(b, loc, m, maxes, folder).front();
       // Tiling creates a new slice at the proper index, the slice step is 1
       // (i.e. the slice view does not subsample, stepping occurs in the loop).
-      subViewOperands.push_back(
-          SubViewOp::Range{min, max, constant_index(folder, 1)});
+      auto m = map.getSubMap({r});
+      auto *offset = applyMapToValues(b, loc, m, lbs, folder).front();
+      offsets.push_back(offset);
+      auto *size = applyMapToValues(b, loc, m, subViewSizes, folder).front();
+      sizes.push_back(size);
+      strides.push_back(constant_index(folder, 1));
     }
-    res.push_back(b.create<SubViewOp>(loc, view, subViewOperands));
+    // TODO(b/144419024) Atm std.subview is not guaranteed in-bounds. Depending
+    // on the semantics we attach to it, we may need to use min(size, dim) here
+    // and canonicalize later.
+    res.push_back(b.create<SubViewOp>(loc, view, offsets, sizes, strides));
   }
 
   // Traverse the mins/maxes and erase those that don't have uses left.
-  mins.append(maxes.begin(), maxes.end());
-  for (auto *v : mins)
-    if (v->use_empty())
-      v->getDefiningOp()->erase();
+  // This is a special type of folding that we only apply when `folder` is
+  // defined.
+  if (folder)
+    for (auto *v : llvm::concat<Value *>(lbs, subViewSizes))
+      if (v->use_empty())
+        v->getDefiningOp()->erase();
 
   return res;
 }
 
-static AffineMap getAffineDifferenceMap(MLIRContext *context) {
-  AffineExpr d0(getAffineDimExpr(0, context)), d1(getAffineDimExpr(1, context));
-  return AffineMap::get(2, 0, {d0 - d1});
-}
-
-static Value *allocBuffer(Type elementType, Value *size) {
-  if (auto cst = dyn_cast_or_null<ConstantIndexOp>(size->getDefiningOp()))
-    return buffer_alloc(
-        BufferType::get(size->getContext(), elementType, cst.getValue()));
-  return buffer_alloc(BufferType::get(size->getContext(), elementType), size);
-}
-
-// Performs promotion of a `subView` into a local buffer of the size of the
-// *ranges* of the `subView`. This produces a buffer whose size may be bigger
-// than the actual size of the `subView` at the boundaries.
-// This is related to the full/partial tile problem.
-// Returns a PromotionInfo containing a `buffer`, `fullLocalView` and
-// `partialLocalView` such that:
-//   * `buffer` is always the size of the full tile.
-//   * `fullLocalView` is a dense contiguous view into that buffer.
-//   * `partialLocalView` is a dense non-contiguous slice of `fullLocalView`
-//     that corresponds to the size of `subView` and accounting for boundary
-//     effects.
-// The point of the full tile buffer is that constant static tile sizes are
-// folded and result in a buffer type with statically known size and alignment
-// properties.
-// To account for general boundary effects, padding must be performed on the
-// boundary tiles. For now this is done with an unconditional `fill` op followed
-// by a partial `copy` op.
-static PromotionInfo promoteFullTileBuffer(OpBuilder &b, Location loc,
-                                           SubViewOp subView,
-                                           OperationFolder &folder) {
-  auto zero = constant_index(folder, 0);
-  auto one = constant_index(folder, 1);
-
-  auto viewType = subView.getViewType();
-  auto rank = viewType.getRank();
-  Value *allocSize = one;
-  SmallVector<Value *, 8> fullRanges, partialRanges;
-  fullRanges.reserve(rank);
-  partialRanges.reserve(rank);
-  for (auto en : llvm::enumerate(subView.getRanges())) {
-    auto rank = en.index();
-    auto rangeValue = en.value();
-    Value *d =
-        isa<linalg::DimOp>(rangeValue.max->getDefiningOp())
-            ? rangeValue.max
-            : applyMapToValues(b, loc, getAffineDifferenceMap(b.getContext()),
-                               {rangeValue.max, rangeValue.min}, folder)
-                  .front();
-    allocSize = muli(folder, allocSize, d).getValue();
-    fullRanges.push_back(range(folder, zero, d, one));
-    partialRanges.push_back(
-        range(folder, zero, linalg::intrinsics::dim(subView, rank), one));
-  }
-  auto *buffer = allocBuffer(viewType.getElementType(), allocSize);
-  auto fullLocalView = view(buffer, fullRanges);
-  auto partialLocalView = slice(fullLocalView, partialRanges);
-  return PromotionInfo{buffer, fullLocalView, partialLocalView};
-}
-
-// Performs promotion of a view `v` into a local buffer of the size of the
-// view. This produces a buffer whose size is exactky the size of `v`.
-// Returns a PromotionInfo containing a `buffer`, `fullLocalView` and
-// `partialLocalView` such that:
-//   * `buffer` is always the size of the view.
-//   * `partialLocalView` is a dense contiguous view into that buffer.
-//   * `fullLocalView` is equal to `partialLocalView`.
-// The point of the full tile buffer is that constant static tile sizes are
-// folded and result in a buffer type with statically known size and alignment
-// properties.
-static PromotionInfo promotePartialTileBuffer(OpBuilder &b, Location loc,
-                                              Value *v,
-                                              OperationFolder &folder) {
-  auto zero = constant_index(folder, 0);
-  auto one = constant_index(folder, 1);
-
-  auto viewType = v->getType().cast<ViewType>();
-  auto rank = viewType.getRank();
-  Value *allocSize = one;
-  SmallVector<Value *, 8> partialRanges;
-  partialRanges.reserve(rank);
-  for (unsigned r = 0; r < rank; ++r) {
-    Value *d = linalg::intrinsics::dim(v, r);
-    allocSize = muli(folder, allocSize, d).getValue();
-    partialRanges.push_back(range(folder, zero, d, one));
-  }
-  auto *buffer = allocBuffer(viewType.getElementType(), allocSize);
-  auto partialLocalView = view(folder, buffer, partialRanges);
-  return PromotionInfo{buffer, partialLocalView, partialLocalView};
-}
-
-SmallVector<PromotionInfo, 8>
-mlir::linalg::promoteLinalgViews(OpBuilder &b, Location loc,
-                                 ArrayRef<Value *> views,
-                                 OperationFolder &folder) {
-  if (views.empty())
-    return {};
-
-  ScopedContext scope(b, loc);
-  SmallVector<PromotionInfo, 8> res;
-  res.reserve(views.size());
-  DenseMap<Value *, PromotionInfo> promotionInfo;
-  for (auto *v : views) {
-    PromotionInfo pi;
-    if (auto subView = dyn_cast<SubViewOp>(v->getDefiningOp()))
-      pi = promoteFullTileBuffer(b, loc, subView, folder);
-    else
-      pi = promotePartialTileBuffer(b, loc, v, folder);
-    promotionInfo.insert(std::make_pair(v, pi));
-    res.push_back(pi);
-  }
-
-  for (auto *v : views) {
-    auto info = promotionInfo.find(v);
-    if (info == promotionInfo.end())
-      continue;
-    auto viewType = v->getType().cast<ViewType>();
-    // TODO(ntv): value to fill with should be related to the operation.
-    // For now, just use APFloat(0.0f).
-    auto t = viewType.getElementType().cast<FloatType>();
-    Value *fillVal = constant_float(folder, APFloat(0.0f), t);
-    // TODO(ntv): fill is only necessary if `promotionInfo` has a full local
-    // view that is different from the partial local view and we are on the
-    // boundary.
-    fill(info->second.fullLocalView, fillVal);
-  }
-
-  for (auto *v : views) {
-    auto info = promotionInfo.find(v);
-    if (info == promotionInfo.end())
-      continue;
-    copy(v, info->second.partialLocalView);
-  }
-  return res;
-}
-
-llvm::Optional<TiledLinalgOp>
-mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<Value *> tileSizes,
-                           OperationFolder &folder,
-                           ArrayRef<bool> viewsToPromote) {
+Optional<TiledLinalgOp> mlir::linalg::tileLinalgOp(
+    OpBuilder &b, LinalgOp op, ArrayRef<Value *> tileSizes,
+    ArrayRef<unsigned> permutation, OperationFolder *folder) {
   // 1. Enforce the convention that "tiling by zero" skips tiling a particular
   // dimension. This convention is significantly simpler to handle instead of
   // adjusting affine maps to account for missing dimensions.
@@ -365,8 +326,17 @@ mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<Value *> tileSizes,
              tileSizes.size() &&
          "expected matching number of tile sizes and loops");
 
-  OpBuilder builder(op.getOperation());
-  ScopedContext scope(builder, op.getLoc());
+  // If permutation is empty, use the identity. Build the permutation map
+  // otherwise.
+  auto invPermutationMap = AffineMap::getMultiDimIdentityMap(
+      tileSizes.size(), ScopedContext::getContext());
+  if (!permutation.empty())
+    invPermutationMap = inversePermutation(
+        AffineMap::getPermutationMap(permutation, ScopedContext::getContext()));
+
+  OpBuilder::InsertionGuard g(b);
+  b.setInsertionPoint(op);
+  ScopedContext scope(b, op.getLoc());
   // 2. Build the tiled loop ranges.
   auto viewSizes = getViewSizes(op);
   // The flattened loopToOperandRangesMaps is expected to be an invertible
@@ -374,76 +344,43 @@ mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<Value *> tileSizes,
   auto viewSizesToLoopsMap =
       inversePermutation(concatAffineMaps(loopToOperandRangesMaps(op)));
   assert(viewSizesToLoopsMap && "expected invertible map");
-  auto loopRanges =
-      makeTiledLoopRanges(scope.getBuilder(), scope.getLocation(),
-                          viewSizesToLoopsMap, viewSizes, tileSizes, folder);
+
+  SmallVector<SubViewOp::Range, 4> loopRanges;
+  LoopIndexToRangeIndexMap loopIndexToRangeIndex;
+  std::tie(loopRanges, loopIndexToRangeIndex) =
+      makeTiledLoopRanges(b, scope.getLocation(), viewSizesToLoopsMap,
+                          viewSizes, tileSizes, folder);
+  if (!permutation.empty())
+    applyPermutationToVector(loopRanges, permutation);
 
   // 3. Create the tiled loops.
   LinalgOp res = op;
   SmallVector<IndexHandle, 4> ivs(loopRanges.size());
-  auto pivs = makeIndexHandlePointers(ivs);
+  auto pivs = makeHandlePointers(MutableArrayRef<IndexHandle>(ivs));
   LoopNestRangeBuilder(pivs, loopRanges)([&] {
     auto b = ScopedContext::getBuilder();
     auto loc = ScopedContext::getLocation();
     SmallVector<Value *, 4> ivValues(ivs.begin(), ivs.end());
+
+    // If we have to apply a permutation to the tiled loop nest, we have to
+    // reorder the induction variables This permutation is the right one
+    // assuming that loopRanges have previously been permuted by
+    // (i,j,k)->(k,i,j) So this permutation should be the inversePermutation of
+    // that one: (d0,d1,d2)->(d2,d0,d1)
+    if (!permutation.empty())
+      ivValues = applyMapToValues(b, loc, invPermutationMap, ivValues, folder);
+
     auto views =
         makeTiledViews(b, loc, op, ivValues, tileSizes, viewSizes, folder);
-
-    // If no promotion, we are done.
-    auto promote = !viewsToPromote.empty() &&
-                   llvm::any_of(llvm::make_range(viewsToPromote.begin(),
-                                                 viewsToPromote.end()),
-                                [](bool b) { return b; });
-    if (!promote) {
-      auto operands = getAssumedNonViewOperands(op);
-      views.append(operands.begin(), operands.end());
-      res = op.clone(b, loc, views);
-      return;
-    }
-
-    // 4. Filter the subset of views that need to be promoted.
-    SmallVector<Value *, 8> filteredViews;
-    filteredViews.reserve(views.size());
-    assert((viewsToPromote.empty() || views.size() == viewsToPromote.size()) &&
-           "expected viewsToPromote to be empty or of the same size as view");
-    for (auto it : llvm::zip(views, viewsToPromote)) {
-      if (!std::get<1>(it))
-        continue;
-      filteredViews.push_back(std::get<0>(it));
-    }
-
-    // 5. Promote the specified views and use them in the new op.
-    auto promotedBufferAndViews =
-        promoteLinalgViews(b, loc, filteredViews, folder);
-    SmallVector<Value *, 8> opViews(views.size(), nullptr);
-    SmallVector<Value *, 8> writebackViews(views.size(), nullptr);
-    for (unsigned i = 0, promotedIdx = 0, e = opViews.size(); i < e; ++i) {
-      if (viewsToPromote[i]) {
-        opViews[i] = promotedBufferAndViews[promotedIdx].fullLocalView;
-        writebackViews[i] =
-            promotedBufferAndViews[promotedIdx].partialLocalView;
-        promotedIdx++;
-      } else {
-        opViews[i] = views[i];
-      }
-    }
     auto operands = getAssumedNonViewOperands(op);
-    opViews.append(operands.begin(), operands.end());
-    res = op.clone(b, loc, opViews);
-
-    // 6. Emit write-back for the promoted output views: copy the partial view.
-    for (unsigned i = 0, e = writebackViews.size(); i < e; ++i) {
-      bool isOutput = res.getIndexOfOutput(opViews[i]).hasValue();
-      if (writebackViews[i] && isOutput)
-        copy(writebackViews[i], views[i]);
-    }
-
-    // 7. Dealloc local buffers.
-    for (const auto &pi : promotedBufferAndViews)
-      buffer_dealloc(pi.buffer);
+    views.append(operands.begin(), operands.end());
+    res = op.clone(b, loc, views);
   });
 
-  // 8. Gather the newly created loops and return them with the new op.
+  // 4. Transforms index arguments of `linalg.generic` w.r.t. to the tiling.
+  transformIndexedGenericOpIndices(b, res, pivs, loopIndexToRangeIndex);
+
+  // 5. Gather the newly created loops and return them with the new op.
   SmallVector<ForOp, 8> loops;
   loops.reserve(ivs.size());
   for (auto iv : ivs)
@@ -452,10 +389,9 @@ mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<Value *> tileSizes,
   return TiledLinalgOp{res, loops};
 }
 
-llvm::Optional<TiledLinalgOp>
-mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<int64_t> tileSizes,
-                           OperationFolder &folder,
-                           ArrayRef<bool> viewsToPromote) {
+Optional<TiledLinalgOp> mlir::linalg::tileLinalgOp(
+    OpBuilder &b, LinalgOp op, ArrayRef<int64_t> tileSizes,
+    ArrayRef<unsigned> permutation, OperationFolder *folder) {
   if (tileSizes.empty())
     return llvm::None;
 
@@ -470,8 +406,9 @@ mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<int64_t> tileSizes,
     return llvm::None;
 
   // Create a builder for tile size constants.
-  OpBuilder builder(op);
-  ScopedContext scope(builder, op.getLoc());
+  OpBuilder::InsertionGuard g(b);
+  b.setInsertionPoint(op);
+  ScopedContext scope(b, op.getLoc());
 
   // Materialize concrete tile size values to pass the generic tiling function.
   SmallVector<Value *, 8> tileSizeValues;
@@ -484,18 +421,15 @@ mlir::linalg::tileLinalgOp(LinalgOp op, ArrayRef<int64_t> tileSizes,
       tileSizeValues.push_back(constant_index(folder, 0));
   }
 
-  return tileLinalgOp(op, tileSizeValues, folder, viewsToPromote);
+  return tileLinalgOp(b, op, tileSizeValues, permutation, folder);
 }
 
-static void tileLinalgOps(FuncOp f, ArrayRef<int64_t> tileSizes,
-                          bool promoteViews) {
+static void tileLinalgOps(FuncOp f, ArrayRef<int64_t> tileSizes) {
+  OpBuilder b(f);
   OperationFolder folder(f.getContext());
-  f.walk([promoteViews, tileSizes, &folder](LinalgOp op) {
-    // TODO(ntv) some heuristic here to decide what to promote. Atm it is all or
-    // nothing.
-    SmallVector<bool, 8> viewsToPromote(op.getNumInputsAndOutputs(),
-                                        promoteViews);
-    auto opLoopsPair = tileLinalgOp(op, tileSizes, folder, viewsToPromote);
+  f.walk([tileSizes, &b, &folder](LinalgOp op) {
+    auto opLoopsPair =
+        tileLinalgOp(b, op, tileSizes, /*permutation=*/{}, &folder);
     // If tiling occurred successfully, erase old op.
     if (opLoopsPair)
       op.erase();
@@ -511,32 +445,26 @@ static void tileLinalgOps(FuncOp f, ArrayRef<int64_t> tileSizes,
 namespace {
 struct LinalgTilingPass : public FunctionPass<LinalgTilingPass> {
   LinalgTilingPass() = default;
-  LinalgTilingPass(ArrayRef<int64_t> sizes, bool promoteViews);
+  LinalgTilingPass(ArrayRef<int64_t> sizes);
 
-  void runOnFunction() override {
-    tileLinalgOps(getFunction(), tileSizes, promoteViews);
-  }
+  void runOnFunction() override { tileLinalgOps(getFunction(), tileSizes); }
 
   SmallVector<int64_t, 8> tileSizes;
-  bool promoteViews;
 };
 } // namespace
 
-LinalgTilingPass::LinalgTilingPass(ArrayRef<int64_t> sizes, bool promoteViews) {
+LinalgTilingPass::LinalgTilingPass(ArrayRef<int64_t> sizes) {
   this->tileSizes.assign(sizes.begin(), sizes.end());
-  this->promoteViews = promoteViews;
 }
 
 std::unique_ptr<OpPassBase<FuncOp>>
-mlir::linalg::createLinalgTilingPass(ArrayRef<int64_t> tileSizes,
-                                     bool promoteViews) {
-  return std::make_unique<LinalgTilingPass>(tileSizes, promoteViews);
+mlir::linalg::createLinalgTilingPass(ArrayRef<int64_t> tileSizes) {
+  return std::make_unique<LinalgTilingPass>(tileSizes);
 }
 
 static PassRegistration<LinalgTilingPass>
     pass("linalg-tile", "Tile operations in the linalg dialect", [] {
       auto pass = std::make_unique<LinalgTilingPass>();
       pass->tileSizes.assign(clTileSizes.begin(), clTileSizes.end());
-      pass->promoteViews = clPromoteFullTileViews;
       return pass;
     });

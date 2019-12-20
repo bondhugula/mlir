@@ -60,7 +60,7 @@ struct ExpressedToQuantizedConverter {
 
 /// Reference implementation of converting between real numbers and values
 /// represented by a UniformQuantizedType.
-/// Note that this is not expected to be speedy and may be superceded eventually
+/// Note that this is not expected to be speedy and may be superseded eventually
 /// by a more optimal implementation.
 /// Also, the interface assumes that quantization is done per-layer and will
 /// need to be wider for various per-channel schemes. As such, this is a
@@ -85,7 +85,7 @@ public:
         clampMax(clampMax), scaleDouble(scale), zeroPointDouble(zeroPoint),
         clampMinDouble(clampMin), clampMaxDouble(clampMax),
         storageBitWidth(storageBitWidth), isSigned(isSigned),
-        roundMode(llvm::APFloat::rmNearestTiesToAway) {}
+        roundMode(APFloat::rmNearestTiesToAway) {}
 
   UniformQuantizedValueConverter(double scale, double zeroPoint,
                                  APFloat clampMin, APFloat clampMax,
@@ -95,13 +95,13 @@ public:
         clampMinDouble(clampMin.convertToDouble()),
         clampMaxDouble(clampMax.convertToDouble()),
         storageBitWidth(storageBitWidth), isSigned(isSigned),
-        roundMode(llvm::APFloat::rmNearestTiesToAway) {}
+        roundMode(APFloat::rmNearestTiesToAway) {}
 
   virtual APInt quantizeFloatToInt(APFloat expressedValue) const {
     // This function is a performance critical code path in quantization
     // since it runs for each single float parameter value.
 
-    // Specalize f32->u8/i8 case to optimize performance.
+    // Specialize f32->u8/i8 case to optimize performance.
     if (&expressedValue.getSemantics() == &APFloat::IEEEsingle() &&
         storageBitWidth == 8 &&
         roundMode == llvm::APFloatBase::rmNearestTiesToAway) {
@@ -154,8 +154,7 @@ private:
     } else {
       signlessResult = static_cast<uint8_t>(clamped);
     }
-    llvm::APInt result(storageBitWidth, signlessResult);
-    return result;
+    return APInt(storageBitWidth, signlessResult);
   }
 
   // Keep both APFloat and double versions of the quantization parameters

@@ -89,7 +89,7 @@ public:
       : subExprs(exprs.begin(), exprs.end()) {}
   AffineExprMatcherStorage(AffineExprMatcher &a, AffineExprMatcher &b)
       : subExprs({a, b}) {}
-  llvm::SmallVector<AffineExprMatcher, 0> subExprs;
+  SmallVector<AffineExprMatcher, 0> subExprs;
   AffineExpr matched;
 };
 } // namespace
@@ -311,7 +311,7 @@ AffineExpr SDBMExpr::getAsAffineExpr() const {
 // LHS if the constant becomes zero.  Otherwise, construct a sum expression.
 template <typename Result>
 Result addConstantAndSink(SDBMDirectExpr expr, int64_t constant, bool negated,
-                          llvm::function_ref<Result(SDBMDirectExpr)> builder) {
+                          function_ref<Result(SDBMDirectExpr)> builder) {
   SDBMDialect *dialect = expr.getDialect();
   if (auto sumExpr = expr.dyn_cast<SDBMSumExpr>()) {
     if (negated)
@@ -336,7 +336,7 @@ Result addConstantAndSink(SDBMDirectExpr expr, int64_t constant, bool negated,
 
 // Construct an expression lhs + constant while maintaining the canonical form
 // of the SDBM expressions, in particular sink the constant expression to the
-// nearest sum expression in the left subtree of the expresison tree.
+// nearest sum expression in the left subtree of the expression tree.
 static SDBMExpr addConstant(SDBMVaryingExpr lhs, int64_t constant) {
   if (auto lhsDiff = lhs.dyn_cast<SDBMDiffExpr>())
     return addConstantAndSink<SDBMExpr>(
@@ -438,7 +438,7 @@ Optional<SDBMExpr> SDBMExpr::tryConvertAffineExpr(AffineExpr affine) {
       assert(!lhs.isa<SDBMConstantExpr>() && "non-canonical affine expression");
 
       // If RHS is a constant, we can always extend the SDBM expression to
-      // include it by sinking the constant into the nearest sum expresion.
+      // include it by sinking the constant into the nearest sum expression.
       if (auto rhsConstant = rhs.dyn_cast<SDBMConstantExpr>()) {
         int64_t constant = rhsConstant.getValue();
         auto varying = lhs.dyn_cast<SDBMVaryingExpr>();
@@ -671,10 +671,7 @@ SDBMDirectExpr SDBMNegExpr::getVar() const {
   return static_cast<ImplType *>(impl)->expr;
 }
 
-namespace mlir {
-namespace ops_assertions {
-
-SDBMExpr operator+(SDBMExpr lhs, SDBMExpr rhs) {
+SDBMExpr mlir::ops_assertions::operator+(SDBMExpr lhs, SDBMExpr rhs) {
   if (auto folded = foldSumDiff(lhs, rhs))
     return folded;
   assert(!(lhs.isa<SDBMNegExpr>() && rhs.isa<SDBMNegExpr>()) &&
@@ -707,7 +704,7 @@ SDBMExpr operator+(SDBMExpr lhs, SDBMExpr rhs) {
   return addConstant(lhs.cast<SDBMVaryingExpr>(), rhsConstant.getValue());
 }
 
-SDBMExpr operator-(SDBMExpr lhs, SDBMExpr rhs) {
+SDBMExpr mlir::ops_assertions::operator-(SDBMExpr lhs, SDBMExpr rhs) {
   // Fold x - x == 0.
   if (lhs == rhs)
     return SDBMConstantExpr::get(lhs.getDialect(), 0);
@@ -734,7 +731,7 @@ SDBMExpr operator-(SDBMExpr lhs, SDBMExpr rhs) {
   return buildDiffExpr(lhs.cast<SDBMDirectExpr>(), (-rhs).cast<SDBMNegExpr>());
 }
 
-SDBMExpr stripe(SDBMExpr expr, SDBMExpr factor) {
+SDBMExpr mlir::ops_assertions::stripe(SDBMExpr expr, SDBMExpr factor) {
   auto constantFactor = factor.cast<SDBMConstantExpr>();
   assert(constantFactor.getValue() > 0 && "non-positive stripe");
 
@@ -744,6 +741,3 @@ SDBMExpr stripe(SDBMExpr expr, SDBMExpr factor) {
 
   return SDBMStripeExpr::get(expr.cast<SDBMDirectExpr>(), constantFactor);
 }
-
-} // namespace ops_assertions
-} // namespace mlir
