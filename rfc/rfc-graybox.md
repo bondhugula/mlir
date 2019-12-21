@@ -123,30 +123,35 @@ regions* here - the outer one containing four ops (including the return
 terminator), and the inner one being the region of the *affine.graybox*.
 
 ```mlir {.mlir}
-func @search(%A : memref<?x?xi32, %S : <?xi32>, %key : i32) {
+// CHECK-LABEL: func @search
+func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
   %ni = dim %A, 0 : memref<?x?xi32>
+  %c1 = constant 1 : index
   // This loop can be parallelized.
   affine.for %i = 0 to %ni {
-    affine.graybox [%A, %S] : (memref<?x?xi32>, memref<?xi32>) {
-      %nj = dim %A, 1 : memref<?x?xi32>
-      br ^bb1(%c0)
+    // CHECK: affine.graybox
+    affine.graybox [%rA, %rS] = (%A, %S) : memref<?x?xi32>, memref<?xi32> {
+      %c0 = constant 0 : index
+      %nj = dim %rA, 1 : memref<?x?xi32>
+      br ^bb1(%c0 : index)
 
-    ^bb1(%j: i32)
-      %p1 = cmpi "lt", %j, %nj : i32
-      cond_br %p1, ^bb2, ^bb5
+    ^bb1(%j: index):
+      %p1 = cmpi "slt", %j, %nj : index
+      cond_br %p1, ^bb2(%j : index), ^bb5
 
-    ^bb2:
-      %v = affine.load %A[%i, %j] : memref<?x?xi32>
+    ^bb2(%j_arg : index):
+      %v = affine.load %rA[%i, %j_arg] : memref<?x?xi32>
       %p2 = cmpi "eq", %v, %key : i32
-      cond_br %p2, ^bb3(%j), ^bb4
+    cond_br %p2, ^bb3(%j_arg : index), ^bb4(%j_arg : index)
 
-    ^bb3(%j: i32)
-      affine.store %j, %S[%i] : memref<?xi32>
+    ^bb3(%j_arg2: index):
+      %j_int = index_cast %j_arg2 : index to i32
+      affine.store %j_int, %rS[%i] : memref<?xi32>
       br ^bb5
 
-    ^bb4:
-      %jinc = addi %j, %c1 : i32
-      br ^bb1(%jinc)
+    ^bb4(%j_arg3 : index):
+      %jinc = addi %j_arg3, %c1 : index
+      br ^bb1(%jinc : index)
 
     ^bb5:
       return
