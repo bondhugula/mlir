@@ -3,7 +3,7 @@
 This proposal is on adding a new op named *affine.graybox* to MLIR's [affine dialect](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md).
 The op allows the polyhedral form to be used without the need for outlining to
 functions, and without the need to turn affine ops such as affine.for, affine.if
-into standard unrestricted for's and if's respectively. In particular, with an 
+into standard unrestricted for's and if's respectively. In particular, with an
 *affine.graybox*, it is possible to represent
 *every* load and store operation using an *affine.load* and *affine.store*
 respectively.
@@ -30,11 +30,11 @@ the previous design with significant implications.
 2. The requirement for an SSA value to be a valid symbol
    ([mlir::isValidSymbol](https://github.com/tensorflow/mlir/blob/3671cf5558a273a865007405503793746e4ddbb7/lib/Dialect/AffineOps/AffineOps.cpp#L128))
    changes so that it also includes (a) symbols at the top-level of any
-   *affine.graybox*, and (b) those values that dominate an *affine.graybox*. In
-   the latter case, symbol validity is sensitive to the enclosing graybox. As
-   such, there has to be an additional method: mlir::isValidSymbol(Value \*v,
-   Operation \*op) to check for symbol validity for use in the specific op. See
-   design alternatives towards the end.
+	 *affine.graybox*, and (b) those values that dominate an *affine.graybox*.
+	 Symbol and dimensional identifier validity are thus sensitive to the
+	 enclosing graybox op or func op. As such, there has to be an additional
+	 method, mlir::isValidSymbol(Value \*v, Operation \*op), to check for symbol
+	 validity for use in the specific op. See design alternatives towards the end.
 
 3. The op is not [isolated from
    above](https://github.com/tensorflow/mlir/blob/be6746fc3b9e6bd0527cc961256e362f44130cd4/include/mlir/IR/OperationSupport.h#L76)
@@ -60,7 +60,7 @@ the previous design with significant implications.
 
 ```mlir {.mlir}
 // Custom form syntax.
-(ssa-id `=`)? `affine.graybox` `[` memref-use-list `]` `:`
+(ssa-id `=`)? `affine.graybox` `(` memref-arg-list `)` `=`  `[` memref-use-list `]` `:`
                               memref-type-list-parens `->` function-result-type
 `{`
   block+
@@ -69,23 +69,21 @@ the previous design with significant implications.
 
 ## Terminology
 
-An *affine region* is the set of all ops that have the same closest enclosing
-*affine.graybox* op or the same enclosing function op (if there is no enclosing
-*affine.graybox*).
-
-Every MLIR op is always part of a unique *affine region*.
+An *affine scope* is the set of all ops that have the same closest enclosing
+*affine.graybox* op or function op. Every MLIR op is always part of a unique
+*affine scope*.
 
 ## Goals
 
-An *affine.graybox* op's goal is to start a new polyhedral symbol context for 
-its [*affine region*](#Terminology), i.e., IR that would have been otherwise 
-considered non-affine and failed verification will now be affine with grayboxes 
+An *affine.graybox* op's goal is to start a new polyhedral symbol context for
+its [*affine scope*](#Terminology), i.e., IR that would have been otherwise
+considered non-affine and failed verification will now be affine with grayboxes
 inserted at the right places. In addition, this proposal ensures that:
 
 * all existing pattern rewrites work across graybox op boundaries,
-* all existing affine passes work correctly as is in the graybox ops while 
+* all existing affine passes work correctly as is in the graybox ops while
   allowing affine passes to work seamlessly at a graybox-local affine level,
-* everything that forced function outlining due to symbol restrictions will no 
+* everything that forced function outlining due to symbol restrictions will no
   longer require such outlining.
 
 ## Examples
@@ -142,7 +140,7 @@ func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
     ^bb2(%j_arg : index):
       %v = affine.load %rA[%i, %j_arg] : memref<?x?xi32>
       %p2 = cmpi "eq", %v, %key : i32
-    cond_br %p2, ^bb3(%j_arg : index), ^bb4(%j_arg : index)
+      cond_br %p2, ^bb3(%j_arg : index), ^bb4(%j_arg : index)
 
     ^bb3(%j_arg2: index):
       %j_int = index_cast %j_arg2 : index to i32
@@ -181,7 +179,7 @@ All affine.for with a graybox.
   %c2 = constant 2 : index
   affine.for %i = 0 to %n {
     affine.for %j = 0 to %n {
-      affine.graybox [] {
+      affine.graybox () = [] {
         %pow = call @powi(%c2, %j) : (index, index) ->  index
         affine.for %k = 0 to %pow {
           affine.for %l = 0 to %n {
@@ -208,11 +206,11 @@ for (i = 0; i < N; ++i) {
   %cf1 = constant 1.0 : f32
   affine.for %i = 0 to 100 {
     %v = affine.load %B[%i] : memref<100xf32>
-    affine.graybox [%A] {
+    affine.graybox [%rA] = (%A) {
       // %v is now a symbol here.
-      %s = affine.load %A[%v] : memref<100xf32>
+      %s = affine.load %rA[%v] : memref<100xf32>
       %o = addf %s, %cf1 : f32
-      affine.store %o, %A[%v] : memref<100xf32>
+      affine.store %o, %rA[%v] : memref<100xf32>
       return;
     }
   }
@@ -351,10 +349,10 @@ func @foo(%A : ..., %X : ..., %Y : ..., %Z : ...) {
       %p = mulf %lhs, %rhs : f32
       %idx.i32 = load %Z[%j] : memref <100 x i32>
       %idx = cast.i32.index %idx.i32
-      affine.graybox [%Y] {
-        %in = affine.load %Y[%idx] : memref <100xf32>
+      affine.graybox [%rY] = (%Y) {
+        %in = affine.load %rY[%idx] : memref <100xf32>
         %out = addf %p, %in : f32
-        affine.store %out, %Y[%idx] : memref <100xf32>
+        affine.store %out, %rY[%idx] : memref <100xf32>
         return
       }
     }
@@ -369,7 +367,7 @@ transformation, the graybox is treated opaquely; the inside of the graybox
 itself is all locally affine. There is no way to analyze or represent
 dependences precisely between the store on %Y outside the graybox and the
 load/store on it inside the graybox. Depedence analysis relies on symbolic
-context which is unique to a specific [*affine region*](#Terminology).
+context which is unique to a specific [*affine scope*](#Terminology).
 
 Note that all scalars within their dominance scope are used freely in the
 graybox region. As an example, any pass that computes memref regions for the
@@ -405,7 +403,7 @@ replaceAllMemRefUsesWith() will all just work transparently and do the work: the
 non-dereferencing uses of that memref on an affine.graybox op just makes things
 like double buffering, data copy generation, etc. all bail out on those (just
 because it isn't polyhedrally analyzeable unless the graybox can be eliminated
-and you get a larger encompassing [*affine region*](#Terminology)) -- the same 
+and you get a larger encompassing [*affine scope*](#Terminology)) -- the same
 way they currently
 bail out on any call ops taking memrefs as arguments or return ops returning
 memrefs.  The same is true for memref dependence analysis: there isn't a way to
@@ -440,7 +438,7 @@ to anyway exist and is reusable/necessary for any op holding one or regions. The
 third one is non-trivial and is a good example to explain the burden explicit
 capture entails.
 
-* [**MemRefCastFolder**](https://github.com/tensorflow/mlir/blob/ef77ad99a621985aeca1df94168efc9489de95b6/lib/Dialect/StandardOps/Ops.cpp#L228): 
+* [**MemRefCastFolder**](https://github.com/tensorflow/mlir/blob/ef77ad99a621985aeca1df94168efc9489de95b6/lib/Dialect/StandardOps/Ops.cpp#L228):
   this pattern already exists and can merely be
   registered on the affine.graybox op.
 
