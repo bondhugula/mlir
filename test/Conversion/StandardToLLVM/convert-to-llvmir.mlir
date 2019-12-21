@@ -1,4 +1,4 @@
-// RUN: mlir-opt -lower-to-llvm %s | FileCheck %s
+// RUN: mlir-opt -convert-std-to-llvm %s -split-input-file | FileCheck %s
 
 // CHECK-LABEL: func @empty() {
 // CHECK-NEXT:  llvm.return
@@ -57,6 +57,14 @@ func @simple_loop() {
 func @simple_caller() {
 ^bb0:
   call @simple_loop() : () -> ()
+  return
+}
+
+// Check that function call attributes persist during conversion.
+// CHECK-LABEL: @call_with_attributes
+func @call_with_attributes() {
+  // CHECK: llvm.call @simple_loop() {baz = [1, 2, 3, 4], foo = "bar"} : () -> ()
+  call @simple_loop() {foo="bar", baz=[1,2,3,4]} : () -> ()
   return
 }
 
@@ -317,23 +325,23 @@ func @more_imperfectly_nested_loops() {
 func @get_i64() -> (i64)
 // CHECK-LABEL: func @get_f32() -> !llvm.float
 func @get_f32() -> (f32)
-// CHECK-LABEL: func @get_memref() -> !llvm<"{ float*, [4 x i64] }">
+// CHECK-LABEL: func @get_memref() -> !llvm<"{ float*, float*, i64, [4 x i64], [4 x i64] }">
 func @get_memref() -> (memref<42x?x10x?xf32>)
 
-// CHECK-LABEL: func @multireturn() -> !llvm<"{ i64, float, { float*, [4 x i64] } }"> {
+// CHECK-LABEL: func @multireturn() -> !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }"> {
 func @multireturn() -> (i64, f32, memref<42x?x10x?xf32>) {
 ^bb0:
 // CHECK-NEXT:  {{.*}} = llvm.call @get_i64() : () -> !llvm.i64
 // CHECK-NEXT:  {{.*}} = llvm.call @get_f32() : () -> !llvm.float
-// CHECK-NEXT:  {{.*}} = llvm.call @get_memref() : () -> !llvm<"{ float*, [4 x i64] }">
+// CHECK-NEXT:  {{.*}} = llvm.call @get_memref() : () -> !llvm<"{ float*, float*, i64, [4 x i64], [4 x i64] }">
   %0 = call @get_i64() : () -> (i64)
   %1 = call @get_f32() : () -> (f32)
   %2 = call @get_memref() : () -> (memref<42x?x10x?xf32>)
-// CHECK-NEXT:  {{.*}} = llvm.mlir.undef : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[0 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[1 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[2 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  llvm.return {{.*}} : !llvm<"{ i64, float, { float*, [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.mlir.undef : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[0] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[1] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.insertvalue {{.*}}, {{.*}}[2] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  llvm.return {{.*}} : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
   return %0, %1, %2 : i64, f32, memref<42x?x10x?xf32>
 }
 
@@ -341,10 +349,10 @@ func @multireturn() -> (i64, f32, memref<42x?x10x?xf32>) {
 // CHECK-LABEL: func @multireturn_caller() {
 func @multireturn_caller() {
 ^bb0:
-// CHECK-NEXT:  {{.*}} = llvm.call @multireturn() : () -> !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[0 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[1 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
-// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[2 : index] : !llvm<"{ i64, float, { float*, [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.call @multireturn() : () -> !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[0] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[1] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
+// CHECK-NEXT:  {{.*}} = llvm.extractvalue {{.*}}[2] : !llvm<"{ i64, float, { float*, float*, i64, [4 x i64], [4 x i64] } }">
   %0:3 = call @multireturn() : () -> (i64, f32, memref<42x?x10x?xf32>)
   %1 = constant 42 : i64
 // CHECK:       {{.*}} = llvm.add {{.*}}, {{.*}} : !llvm.i64
@@ -356,9 +364,8 @@ func @multireturn_caller() {
   return
 }
 
-// CHECK-LABEL: func @vector_ops(%arg0: !llvm<"<4 x float>">, %arg1: !llvm<"<4 x i1>">, %arg2: !llvm<"<4 x i64>">) -> !llvm<"<4 x float>"> {
-func @vector_ops(vector<4xf32>, vector<4xi1>, vector<4xi64>) -> vector<4xf32> {
-^bb0(%arg0: vector<4xf32>, %arg1: vector<4xi1>, %arg2: vector<4xi64>):
+// CHECK-LABEL: func @vector_ops(%arg0: !llvm<"<4 x float>">, %arg1: !llvm<"<4 x i1>">, %arg2: !llvm<"<4 x i64>">, %arg3: !llvm<"<4 x i64>">) -> !llvm<"<4 x float>"> {
+func @vector_ops(%arg0: vector<4xf32>, %arg1: vector<4xi1>, %arg2: vector<4xi64>, %arg3: vector<4xi64>) -> vector<4xf32> {
 // CHECK-NEXT:  %0 = llvm.mlir.constant(dense<4.200000e+01> : vector<4xf32>) : !llvm<"<4 x float>">
   %0 = constant dense<42.> : vector<4xf32>
 // CHECK-NEXT:  %1 = llvm.fadd %arg0, %0 : !llvm<"<4 x float>">
@@ -375,12 +382,12 @@ func @vector_ops(vector<4xf32>, vector<4xi1>, vector<4xi64>) -> vector<4xf32> {
   %7 = divf %arg0, %0 : vector<4xf32>
 // CHECK-NEXT:  %7 = llvm.frem %arg0, %0 : !llvm<"<4 x float>">
   %8 = remf %arg0, %0 : vector<4xf32>
-// CHECK-NEXT:  %8 = llvm.and %arg2, %arg2 : !llvm<"<4 x i64>">
-  %9 = and %arg2, %arg2 : vector<4xi64>
-// CHECK-NEXT:  %9 = llvm.or %arg2, %arg2 : !llvm<"<4 x i64>">
-  %10 = or %arg2, %arg2 : vector<4xi64>
-// CHECK-NEXT:  %10 = llvm.xor %arg2, %arg2 : !llvm<"<4 x i64>">
-  %11 = xor %arg2, %arg2 : vector<4xi64>
+// CHECK-NEXT:  %8 = llvm.and %arg2, %arg3 : !llvm<"<4 x i64>">
+  %9 = and %arg2, %arg3 : vector<4xi64>
+// CHECK-NEXT:  %9 = llvm.or %arg2, %arg3 : !llvm<"<4 x i64>">
+  %10 = or %arg2, %arg3 : vector<4xi64>
+// CHECK-NEXT:  %10 = llvm.xor %arg2, %arg3 : !llvm<"<4 x i64>">
+  %11 = xor %arg2, %arg3 : vector<4xi64>
   return %1 : vector<4xf32>
 }
 
@@ -413,6 +420,14 @@ func @ops(f32, f32, i32, i32) -> (f32, i32) {
   %12 = or %arg2, %arg3 : i32
 // CHECK-NEXT: %12 = llvm.xor %arg2, %arg3 : !llvm.i32
   %13 = xor %arg2, %arg3 : i32
+// CHECK-NEXT: %13 = "llvm.intr.exp"(%arg0) : (!llvm.float) -> !llvm.float
+  %14 = std.exp %arg0 : f32
+// CHECK-NEXT: %14 = llvm.call @tanhf(%arg0) : (!llvm.float) -> !llvm.float
+  %15 = std.tanh %arg0 : f32
+// CHECK-NEXT: %15 = llvm.mlir.constant(7.900000e-01 : f64) : !llvm.double
+  %16 = constant 7.9e-01 : f64
+// CHECK-NEXT: %16 = llvm.call @tanh(%15) : (!llvm.double) -> !llvm.double
+  %17 = std.tanh %16 : f64
 
   return %0, %4 : f32, i32
 }
@@ -443,6 +458,30 @@ func @sitofp(%arg0 : i32, %arg1 : i64) {
   return
 }
 
+// Checking conversion of integer types to floating point.
+// CHECK-LABEL: @fpext
+func @fpext(%arg0 : f16, %arg1 : f32) {
+// CHECK-NEXT: = llvm.fpext {{.*}} : !llvm.half to !llvm.float
+  %0 = fpext %arg0: f16 to f32
+// CHECK-NEXT: = llvm.fpext {{.*}} : !llvm.half to !llvm.double
+  %1 = fpext %arg0: f16 to f64
+// CHECK-NEXT: = llvm.fpext {{.*}} : !llvm.float to !llvm.double
+  %2 = fpext %arg1: f32 to f64
+  return
+}
+
+// Checking conversion of integer types to floating point.
+// CHECK-LABEL: @fptrunc
+func @fptrunc(%arg0 : f32, %arg1 : f64) {
+// CHECK-NEXT: = llvm.fptrunc {{.*}} : !llvm.float to !llvm.half
+  %0 = fptrunc %arg0: f32 to f16
+// CHECK-NEXT: = llvm.fptrunc {{.*}} : !llvm.double to !llvm.half
+  %1 = fptrunc %arg1: f64 to f16
+// CHECK-NEXT: = llvm.fptrunc {{.*}} : !llvm.double to !llvm.float
+  %2 = fptrunc %arg1: f64 to f32
+  return
+}
+
 // Check sign and zero extension and truncation of integers.
 // CHECK-LABEL: @integer_extension_and_truncation
 func @integer_extension_and_truncation() {
@@ -458,23 +497,21 @@ func @integer_extension_and_truncation() {
 }
 
 // CHECK-LABEL: @dfs_block_order
-func @dfs_block_order() -> (i32) {
-// CHECK-NEXT:  %0 = llvm.mlir.constant(42 : i32) : !llvm.i32
+func @dfs_block_order(%arg0: i32) -> (i32) {
+// CHECK-NEXT:  %[[CST:.*]] = llvm.mlir.constant(42 : i32) : !llvm.i32
   %0 = constant 42 : i32
 // CHECK-NEXT:  llvm.br ^bb2
   br ^bb2
 
 // CHECK-NEXT: ^bb1:
-// CHECK-NEXT:  %1 = llvm.add %0, %2 : !llvm.i32
-// CHECK-NEXT:  llvm.return %1 : !llvm.i32
+// CHECK-NEXT:  %[[ADD:.*]] = llvm.add %arg0, %[[CST]] : !llvm.i32
+// CHECK-NEXT:  llvm.return %[[ADD]] : !llvm.i32
 ^bb1:
-  %2 = addi %0, %1 : i32
+  %2 = addi %arg0, %0 : i32
   return %2 : i32
 
 // CHECK-NEXT: ^bb2:
 ^bb2:
-// CHECK-NEXT:  %2 = llvm.mlir.constant(55 : i32) : !llvm.i32
-  %1 = constant 55 : i32
 // CHECK-NEXT:  llvm.br ^bb1
   br ^bb1
 }
@@ -536,34 +573,237 @@ func @vec_bin(%arg0: vector<2x2x2xf32>) -> vector<2x2x2xf32> {
 //  CHECK-NEXT: llvm.mlir.undef : !llvm<"[2 x [2 x <2 x float>]]">
 
 // This block appears 2x2 times
-//  CHECK-NEXT: llvm.extractvalue %{{.*}}[0 : index, 0 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//  CHECK-NEXT: llvm.extractvalue %{{.*}}[0 : index, 0 : index] : !llvm<"[2 x [2 x <2 x float>]]">
+//  CHECK-NEXT: llvm.extractvalue %{{.*}}[0, 0] : !llvm<"[2 x [2 x <2 x float>]]">
+//  CHECK-NEXT: llvm.extractvalue %{{.*}}[0, 0] : !llvm<"[2 x [2 x <2 x float>]]">
 //  CHECK-NEXT: llvm.fadd %{{.*}} : !llvm<"<2 x float>">
-//  CHECK-NEXT: llvm.insertvalue %{{.*}}[0 : index, 0 : index] : !llvm<"[2 x [2 x <2 x float>]]">
+//  CHECK-NEXT: llvm.insertvalue %{{.*}}[0, 0] : !llvm<"[2 x [2 x <2 x float>]]">
 
 // We check the proper indexing of extract/insert in the remaining 3 positions.
-//       CHECK: llvm.extractvalue %{{.*}}[0 : index, 1 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//       CHECK: llvm.insertvalue %{{.*}}[0 : index, 1 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//       CHECK: llvm.extractvalue %{{.*}}[1 : index, 0 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//       CHECK: llvm.insertvalue %{{.*}}[1 : index, 0 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//       CHECK: llvm.extractvalue %{{.*}}[1 : index, 1 : index] : !llvm<"[2 x [2 x <2 x float>]]">
-//       CHECK: llvm.insertvalue %{{.*}}[1 : index, 1 : index] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.extractvalue %{{.*}}[0, 1] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.insertvalue %{{.*}}[0, 1] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.extractvalue %{{.*}}[1, 0] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.insertvalue %{{.*}}[1, 0] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.extractvalue %{{.*}}[1, 1] : !llvm<"[2 x [2 x <2 x float>]]">
+//       CHECK: llvm.insertvalue %{{.*}}[1, 1] : !llvm<"[2 x [2 x <2 x float>]]">
 
 // And we're done
 //   CHECK-NEXT: return
 }
 
 // CHECK-LABEL: @splat
-// CHECK-SAME: [[A:%arg[0-9]+]]: !llvm<"<4 x float>">
-// CHECK-SAME: [[ELT:%arg[0-9]+]]: !llvm.float
+// CHECK-SAME: %[[A:arg[0-9]+]]: !llvm<"<4 x float>">
+// CHECK-SAME: %[[ELT:arg[0-9]+]]: !llvm.float
 func @splat(%a: vector<4xf32>, %b: f32) -> vector<4xf32> {
   %vb = splat %b : vector<4xf32>
   %r = mulf %a, %vb : vector<4xf32>
   return %r : vector<4xf32>
 }
-// CHECK-NEXT: [[UNDEF:%[0-9]+]] = llvm.mlir.undef : !llvm<"<4 x float>">
-// CHECK-NEXT: [[ZERO:%[0-9]+]] = llvm.mlir.constant(0 : i32) : !llvm.i32
-// CHECK-NEXT: [[V:%[0-9]+]] = llvm.insertelement [[UNDEF]], [[ELT]], [[ZERO]] : !llvm<"<4 x float>">
-// CHECK-NEXT: [[SPLAT:%[0-9]+]] = llvm.shufflevector [[V]], [[UNDEF]] [0 : i32, 0 : i32, 0 : i32, 0 : i32]
-// CHECK-NEXT: [[SCALE:%[0-9]+]] = llvm.fmul [[A]], [[SPLAT]] : !llvm<"<4 x float>">
-// CHECK-NEXT: llvm.return [[SCALE]] : !llvm<"<4 x float>">
+// CHECK-NEXT: %[[UNDEF:[0-9]+]] = llvm.mlir.undef : !llvm<"<4 x float>">
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = llvm.mlir.constant(0 : i32) : !llvm.i32
+// CHECK-NEXT: %[[V:[0-9]+]] = llvm.insertelement %[[ELT]], %[[UNDEF]][%[[ZERO]] : !llvm.i32] : !llvm<"<4 x float>">
+// CHECK-NEXT: %[[SPLAT:[0-9]+]] = llvm.shufflevector %[[V]], %[[UNDEF]] [0 : i32, 0 : i32, 0 : i32, 0 : i32]
+// CHECK-NEXT: %[[SCALE:[0-9]+]] = llvm.fmul %[[A]], %[[SPLAT]] : !llvm<"<4 x float>">
+// CHECK-NEXT: llvm.return %[[SCALE]] : !llvm<"<4 x float>">
+
+// CHECK-LABEL: func @view(
+// CHECK: %[[ARG0:.*]]: !llvm.i64, %[[ARG1:.*]]: !llvm.i64, %[[ARG2:.*]]: !llvm.i64
+func @view(%arg0 : index, %arg1 : index, %arg2 : index) {
+  // CHECK: llvm.mlir.constant(2048 : index) : !llvm.i64
+  // CHECK: llvm.mlir.undef : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  %0 = alloc() : memref<2048xi8>
+
+  // Test two dynamic sizes and dynamic offset.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG2]], %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG1]], %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG0]], %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mul %{{.*}}, %[[ARG1]]
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %1 = view %0[%arg2][%arg0, %arg1]
+    : memref<2048xi8> to memref<?x?xf32, (d0, d1)[s0, s1] -> (d0 * s0 + d1 + s1)>
+
+  // Test two dynamic sizes and static offset.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(0 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %arg0, %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mul %{{.*}}, %[[ARG1]]
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %2 = view %0[][%arg0, %arg1]
+    : memref<2048xi8> to memref<?x?xf32, (d0, d1)[s0] -> (d0 * s0 + d1)>
+
+  // Test one dynamic size and dynamic offset.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG2]], %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG1]], %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(4 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mul %{{.*}}, %[[ARG1]]
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %3 = view %0[%arg2][%arg1]
+    : memref<2048xi8> to memref<4x?xf32, (d0, d1)[s0, s1] -> (d0 * s0 + d1 + s1)>
+
+  // Test one dynamic size and static offset.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(0 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(16 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG0]], %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(4 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %4 = view %0[][%arg0]
+    : memref<2048xi8> to memref<?x16xf32, (d0, d1) -> (d0 * 4 + d1)>
+
+  // Test static sizes and static offset.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(0 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(4 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(64 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mlir.constant(4 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %5 = view %0[][]
+    : memref<2048xi8> to memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)>
+
+  // Test dynamic everything.
+  // CHECK: llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.extractvalue %{{.*}}[1] : !llvm<"{ i8*, i8*, i64, [1 x i64], [1 x i64] }">
+  // CHECK: llvm.bitcast %{{.*}} : !llvm<"i8*"> to !llvm<"float*">
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG2]], %{{.*}}[2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG1]], %{{.*}}[3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE_1:.*]] = llvm.mlir.constant(1 : index) : !llvm.i64
+  // CHECK: llvm.insertvalue %[[STRIDE_1]], %{{.*}}[4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.insertvalue %[[ARG0]], %{{.*}}[3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: llvm.mul %[[STRIDE_1]], %[[ARG1]] : !llvm.i64
+  // CHECK: llvm.insertvalue %{{.*}}, %{{.*}}[4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %6 = view %0[%arg2][%arg0, %arg1]
+    : memref<2048xi8> to memref<?x?xf32, (d0, d1)[s0, s1] -> (d0 * s0 + d1 + s1)>
+
+  return
+}
+
+// CHECK-LABEL: func @subview(
+// CHECK: %[[MEMREFPTR:.*]]: !llvm<{{.*}}>, %[[ARG0:.*]]: !llvm.i64, %[[ARG1:.*]]: !llvm.i64, %[[ARG2:.*]]: !llvm.i64
+func @subview(%0 : memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)>, %arg0 : index, %arg1 : index, %arg2 : index) {
+  // CHECK: %[[MEMREF:.*]] = llvm.load %[[MEMREFPTR]] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">
+  // CHECK: %[[DESC:.*]] = llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC0:.*]] = llvm.insertvalue %{{.*}}, %[[DESC]][0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC1:.*]] = llvm.insertvalue %{{.*}}, %[[DESC0]][1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE0:.*]] = llvm.extractvalue %[[MEMREF]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE1:.*]] = llvm.extractvalue %[[MEMREF]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[OFF:.*]] = llvm.extractvalue %[[MEMREF]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[OFFINC:.*]] = llvm.mul %[[ARG0]], %[[STRIDE0]] : !llvm.i64
+  // CHECK: %[[OFF1:.*]] = llvm.add %[[OFF]], %[[OFFINC]] : !llvm.i64
+  // CHECK: %[[OFFINC1:.*]] = llvm.mul %[[ARG1]], %[[STRIDE1]] : !llvm.i64
+  // CHECK: %[[OFF2:.*]] = llvm.add %[[OFF1]], %[[OFFINC1]] : !llvm.i64
+  // CHECK: %[[DESC2:.*]] = llvm.insertvalue %[[OFF2]], %[[DESC1]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC3:.*]] = llvm.insertvalue %[[ARG1]], %[[DESC2]][3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESCSTRIDE1:.*]] = llvm.mul %[[ARG1]], %[[STRIDE1]] : !llvm.i64
+  // CHECK: %[[DESC4:.*]] = llvm.insertvalue %[[DESCSTRIDE1]], %[[DESC3]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC5:.*]] = llvm.insertvalue %[[ARG0]], %[[DESC4]][3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESCSTRIDE0:.*]] = llvm.mul %[[ARG0]], %[[STRIDE0]] : !llvm.i64
+  // CHECK: llvm.insertvalue %[[DESCSTRIDE0]], %[[DESC5]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %1 = subview %0[%arg0, %arg1][%arg0, %arg1][%arg0, %arg1] :
+    memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)> to memref<?x?xf32, (d0, d1)[s0, s1, s2] -> (d0 * s1 + d1 * s2 + s0)>
+  return
+}
+
+// CHECK-LABEL: func @subview_const_size(
+// CHECK: %[[MEMREFPTR:.*]]: !llvm<{{.*}}>, %[[ARG0:.*]]: !llvm.i64, %[[ARG1:.*]]: !llvm.i64, %[[ARG2:.*]]: !llvm.i64
+func @subview_const_size(%0 : memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)>, %arg0 : index, %arg1 : index, %arg2 : index) {
+  // CHECK: %[[MEMREF:.*]] = llvm.load %[[MEMREFPTR]] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">
+  // CHECK: %[[DESC:.*]] = llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC0:.*]] = llvm.insertvalue %{{.*}}, %[[DESC]][0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC1:.*]] = llvm.insertvalue %{{.*}}, %[[DESC0]][1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE0:.*]] = llvm.extractvalue %[[MEMREF]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE1:.*]] = llvm.extractvalue %[[MEMREF]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[CST4:.*]] = llvm.mlir.constant(4 : i64)
+  // CHECK: %[[CST2:.*]] = llvm.mlir.constant(2 : i64)
+  // CHECK: %[[OFF:.*]] = llvm.extractvalue %[[MEMREF]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[OFFINC:.*]] = llvm.mul %[[ARG0]], %[[STRIDE0]] : !llvm.i64
+  // CHECK: %[[OFF1:.*]] = llvm.add %[[OFF]], %[[OFFINC]] : !llvm.i64
+  // CHECK: %[[OFFINC1:.*]] = llvm.mul %[[ARG1]], %[[STRIDE1]] : !llvm.i64
+  // CHECK: %[[OFF2:.*]] = llvm.add %[[OFF1]], %[[OFFINC1]] : !llvm.i64
+  // CHECK: %[[DESC2:.*]] = llvm.insertvalue %[[OFF2]], %[[DESC1]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC3:.*]] = llvm.insertvalue %[[CST2]], %[[DESC2]][3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESCSTRIDE1:.*]] = llvm.mul %[[ARG1]], %[[STRIDE1]] : !llvm.i64
+  // CHECK: %[[DESC4:.*]] = llvm.insertvalue %[[DESCSTRIDE1]], %[[DESC3]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC5:.*]] = llvm.insertvalue %[[CST4]], %[[DESC4]][3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESCSTRIDE0:.*]] = llvm.mul %[[ARG0]], %[[STRIDE0]] : !llvm.i64
+  // CHECK: llvm.insertvalue %[[DESCSTRIDE0]], %[[DESC5]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %1 = subview %0[%arg0, %arg1][][%arg0, %arg1] :
+    memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)> to memref<4x2xf32, (d0, d1)[s0, s1, s2] -> (d0 * s1 + d1 * s2 + s0)>
+  return
+}
+
+// CHECK-LABEL: func @subview_const_stride(
+// CHECK: %[[MEMREFPTR:.*]]: !llvm<{{.*}}>, %[[ARG0:.*]]: !llvm.i64, %[[ARG1:.*]]: !llvm.i64, %[[ARG2:.*]]: !llvm.i64
+func @subview_const_stride(%0 : memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)>, %arg0 : index, %arg1 : index, %arg2 : index) {
+  // CHECK: %[[MEMREF:.*]] = llvm.load %[[MEMREFPTR]] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">
+  // CHECK: %[[DESC:.*]] = llvm.mlir.undef : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC0:.*]] = llvm.insertvalue %{{.*}}, %[[DESC]][0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC1:.*]] = llvm.insertvalue %{{.*}}, %[[DESC0]][1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE0:.*]] = llvm.extractvalue %[[MEMREF]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[STRIDE1:.*]] = llvm.extractvalue %[[MEMREF]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[OFF:.*]] = llvm.extractvalue %[[MEMREF]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[OFFINC:.*]] = llvm.mul %[[ARG0]], %[[STRIDE0]] : !llvm.i64
+  // CHECK: %[[OFF1:.*]] = llvm.add %[[OFF]], %[[OFFINC]] : !llvm.i64
+  // CHECK: %[[OFFINC1:.*]] = llvm.mul %[[ARG1]], %[[STRIDE1]] : !llvm.i64
+  // CHECK: %[[OFF2:.*]] = llvm.add %[[OFF1]], %[[OFFINC1]] : !llvm.i64
+  // CHECK: %[[DESC2:.*]] = llvm.insertvalue %[[OFF2]], %[[DESC1]][2] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC3:.*]] = llvm.insertvalue %[[ARG1]], %[[DESC2]][3, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[CST2:.*]] = llvm.mlir.constant(2 : i64)
+  // CHECK: %[[DESC4:.*]] = llvm.insertvalue %[[CST2]], %[[DESC3]][4, 1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[DESC5:.*]] = llvm.insertvalue %[[ARG0]], %[[DESC4]][3, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  // CHECK: %[[CST4:.*]] = llvm.mlir.constant(4 : i64)
+  // CHECK: llvm.insertvalue %[[CST4]], %[[DESC5]][4, 0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+  %1 = subview %0[%arg0, %arg1][%arg0, %arg1][] :
+    memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)> to memref<?x?xf32, (d0, d1)[s0] -> (d0 * 4 + d1 * 2 + s0)>
+  return
+}
+
+// -----
+
+module {
+  func @check_tanh_func_added_only_once_to_symbol_table(%f: f32, %lf: f64) -> () {
+    %f0 = std.tanh %f : f32
+    %f1 = std.tanh %f0 : f32
+    %lf0 = std.tanh %lf : f64
+    %lf1 = std.tanh %lf0 : f64
+    return
+  }
+// CHECK: module {
+// CHECK: llvm.func @tanh(!llvm.double) -> !llvm.double
+// CHECK: llvm.func @tanhf(!llvm.float) -> !llvm.float
+// CHECK-LABEL: func @check_tanh_func_added_only_once_to_symbol_table
+}

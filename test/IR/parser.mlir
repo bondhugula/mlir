@@ -115,9 +115,10 @@ func @memrefs_drop_triv_id_trailing(memref<2x2xi8, (d0, d1) -> (d1, d0),
                                               (d0, d1) -> (d0, d1)>)
 
 // CHECK: func @memrefs_drop_triv_id_middle(memref<2x2xi8, #map{{[0-9]+}}, #map{{[0-9]+}}>)
-func @memrefs_drop_triv_id_middle(memref<2x2xi8, (d0, d1) -> (d0, d1 + 1),
-                                            (d0, d1) -> (d0, d1),
-					    (d0, d1) -> (d0 + 1, d1)>)
+func @memrefs_drop_triv_id_middle(memref<2x2xi8,
+                                         (d0, d1) -> (d0, d1 + 1),
+                                         (d0, d1) -> (d0, d1),
+                                         (d0, d1) -> (d0 + 1, d1)>)
 
 // CHECK: func @memrefs_drop_triv_id_multiple(memref<2xi8>)
 func @memrefs_drop_triv_id_multiple(memref<2xi8, (d0) -> (d0), (d0) -> (d0)>)
@@ -520,11 +521,14 @@ func @stringquote() -> () {
 
 // CHECK-LABEL: func @unitAttrs
 func @unitAttrs() -> () {
-  // CHECK-NEXT: "foo"() {unitAttr} : () -> ()
+  // CHECK-NEXT: "foo"() {unitAttr}
   "foo"() {unitAttr = unit} : () -> ()
 
-  // CHECK-NEXT: "foo"() {unitAttr} : () -> ()
+  // CHECK-NEXT: "foo"() {unitAttr}
   "foo"() {unitAttr} : () -> ()
+
+  // CHECK-NEXT: "foo"() {nested = {unitAttr}}
+  "foo"() {nested = {unitAttr}} : () -> ()
   return
 }
 
@@ -830,7 +834,7 @@ func @unregistered_term(%arg0 : i1) -> i1 {
 
 // CHECK-LABEL: func @dialect_attrs
 func @dialect_attrs()
-    // CHECK-NEXT: attributes  {dialect.attr = 10
+    // CHECK: attributes  {dialect.attr = 10
     attributes {dialect.attr = 10} {
   return
 }
@@ -844,6 +848,11 @@ func @external_func_arg_attrs(i32, i1 {dialect.attr = 10 : i64}, i32)
 // CHECK-LABEL: func @func_arg_attrs(%{{.*}}: i1 {dialect.attr = 10 : i64})
 func @func_arg_attrs(%arg0: i1 {dialect.attr = 10 : i64}) {
   return
+}
+
+// CHECK-LABEL: func @func_result_attrs({{.*}}) -> (f32 {dialect.attr = 1 : i64})
+func @func_result_attrs(%arg0: f32) -> (f32 {dialect.attr = 1}) {
+  return %arg0 : f32
 }
 
 // CHECK-LABEL: func @empty_tuple(tuple<>)
@@ -865,11 +874,18 @@ func @pretty_form_multi_result() -> (i16, i16) {
   return %quot, %rem : i16, i16
 }
 
+// CHECK-LABEL: func @pretty_form_multi_result_groups
+func @pretty_form_multi_result_groups() -> (i16, i16, i16, i16, i16) {
+  // CHECK: %[[RES:.*]]:5 =
+  // CHECK: return %[[RES]]#0, %[[RES]]#1, %[[RES]]#2, %[[RES]]#3, %[[RES]]#4
+  %group_1:2, %group_2, %group_3:2 = "foo_test"() : () -> (i16, i16, i16, i16, i16)
+  return %group_1#0, %group_1#1, %group_2, %group_3#0, %group_3#1 : i16, i16, i16, i16, i16
+}
+
 // CHECK-LABEL: func @pretty_dialect_attribute()
 func @pretty_dialect_attribute() {
-
-  // CHECK: "foo.unknown_op"() {foo = #foo.simpleattr} : () -> ()
-  "foo.unknown_op"() {foo = #foo.simpleattr} : () -> ()
+  // CHECK: "foo.unknown_op"() {foo = #foo.simple_attr} : () -> ()
+  "foo.unknown_op"() {foo = #foo.simple_attr} : () -> ()
 
   // CHECK: "foo.unknown_op"() {foo = #foo.complexattr<abcd>} : () -> ()
   "foo.unknown_op"() {foo = #foo.complexattr<abcd>} : () -> ()
@@ -959,7 +975,7 @@ func @f16_special_values() {
   // F16 positive infinity.
   // CHECK: constant 0x7C00 : f16
   %3 = constant 0x7C00 : f16
-  // F16 negative inifinity.
+  // F16 negative infinity.
   // CHECK: constant 0xFC00 : f16
   %4 = constant 0xFC00 : f16
 
@@ -1004,7 +1020,7 @@ func @f64_special_values() {
   // CHECK: constant 0xFFF0000001000000 : f64
   %3 = constant 0xFFF0000001000000 : f64
 
-  // F64 positive inifinity.
+  // F64 positive infinity.
   // CHECK: constant 0x7FF0000000000000 : f64
   %4 = constant 0x7FF0000000000000 : f64
   // F64 negative infinity.
@@ -1088,4 +1104,30 @@ func @wrapped_keyword_test() {
   // CHECK: test.wrapped_keyword foo.keyword
   test.wrapped_keyword foo.keyword
   return
+}
+
+// CHECK-LABEL: func @"\22_string_symbol_reference\22"
+func @"\"_string_symbol_reference\""() {
+  // CHECK: ref = @"\22_string_symbol_reference\22"
+  "foo.symbol_reference"() {ref = @"\"_string_symbol_reference\""} : () -> ()
+  return
+}
+
+// CHECK-LABEL: func @nested_reference
+// CHECK: ref = @some_symbol::@some_nested_symbol
+func @nested_reference() attributes {test.ref = @some_symbol::@some_nested_symbol }
+
+// CHECK-LABEL: func @custom_asm_names
+func @custom_asm_names() -> (i32, i32, i32, i32, i32, i32, i32) {
+  // CHECK: %[[FIRST:first.*]], %[[MIDDLE:middle_results.*]]:2, %[[LAST:[0-9]+]]
+  %0, %1:2, %2 = "test.asm_interface_op"() : () -> (i32, i32, i32, i32)
+
+  // CHECK: %[[FIRST_2:first.*]], %[[LAST_2:[0-9]+]]
+  %3, %4 = "test.asm_interface_op"() : () -> (i32, i32)
+
+  // CHECK: %[[RESULT:result.*]]
+  %5 = "test.asm_dialect_interface_op"() : () -> (i32)
+
+  // CHECK: return %[[FIRST]], %[[MIDDLE]]#0, %[[MIDDLE]]#1, %[[LAST]], %[[FIRST_2]], %[[LAST_2]]
+  return %0, %1#0, %1#1, %2, %3, %4, %5 : i32, i32, i32, i32, i32, i32, i32
 }

@@ -60,16 +60,17 @@ allowed in a TableGen file (typically with filename suffix `.td`) can be found
 [here][TableGenIntro]. The formal language specification can be found
 [here][TableGenRef]. _Roughly_ speaking,
 
-* TableGen `class` is similar to C++ class; it can be templated and subclassed.
-* TableGen `def` is similar to C++ object; it can be declared by specializing
-  a TableGen `class` (e.g., `def MyDef : MyClass<...>;`) or completely
-  independently (e.g., `def MyDef;`). It cannot be further templated or
-  subclassed.
-* TableGen `dag` is a dedicated type for directed graph of elements. A `dag`
-  has one operator and zero or more arguments. Its syntax is `(operator arg0,
-  arg1, argN)`. The operator can be any TableGen `def`; an argument can be
-  anything, including `dag` itself. We can have names attached to both the
-  operator and the arguments like `(MyOp:$op_name MyArg:$arg_name)`.
+*   TableGen `class` is similar to C++ class; it can be templated and
+    subclassed.
+*   TableGen `def` is similar to C++ object; it can be declared by specializing
+    a TableGen `class` (e.g., `def MyDef : MyClass<...>;`) or completely
+    independently (e.g., `def MyDef;`). It cannot be further templated or
+    subclassed.
+*   TableGen `dag` is a dedicated type for directed acyclic graph of elements. A
+    `dag` has one operator and zero or more arguments. Its syntax is `(operator
+    arg0, arg1, argN)`. The operator can be any TableGen `def`; an argument can
+    be anything, including `dag` itself. We can have names attached to both the
+    operator and the arguments like `(MyOp:$op_name MyArg:$arg_name)`.
 
 Please see the [language introduction][TableGenIntro] to learn about all the
 types and expressions supported by TableGen.
@@ -81,23 +82,23 @@ their semantics via a special [TableGen backend][TableGenBackend]:
 [`OpDefinitionsGen`][OpDefinitionsGen]. These constructs are defined in
 [`OpBase.td`][OpBase]. The main ones are
 
-* The `Op` class: It is the main construct for defining operations. All facts
-  regarding the operation is specified when specializing this class, with the
-  help of the following constructs.
-* The `Dialect` class: Operations belonging to one logical group are placed in
-  the same dialect. The `Dialect` class contains dialect-level information.
-* The `OpTrait` class hierarchy: They are used to specify special properties and
-  constraints of the operation, including whether the operation has side effect
-  or whether its output has the same shape as the input.
-* The `ins`/`outs` marker: These are two special makers builtin to the
-  `OpDefinitionsGen` backend. They lead the definitions of operands/attributes
-  and results respectively.
-* The `TypeConstraint` class hierarchy: They are used to specify the constraints
-  over operands or results. A notable subclass hierarchy is `Type`, which
-  stands for constraints for common C++ types.
-* The `AttrConstraint` class hierarchy: They are used to specify the constraints
-  over attributes. A notable subclass hierarchy is `Attr`, which stands for
-  constraints for attributes whose values are of common types.
+*   The `Op` class: It is the main construct for defining operations. All facts
+    regarding the operation are specified when specializing this class, with the
+    help of the following constructs.
+*   The `Dialect` class: Operations belonging to one logical group are placed in
+    the same dialect. The `Dialect` class contains dialect-level information.
+*   The `OpTrait` class hierarchy: They are used to specify special properties
+    and constraints of the operation, including whether the operation has side
+    effect or whether its output has the same shape as the input.
+*   The `ins`/`outs` marker: These are two special makers builtin to the
+    `OpDefinitionsGen` backend. They lead the definitions of operands/attributes
+    and results respectively.
+*   The `TypeConstraint` class hierarchy: They are used to specify the
+    constraints over operands or results. A notable subclass hierarchy is
+    `Type`, which stands for constraints for common C++ types.
+*   The `AttrConstraint` class hierarchy: They are used to specify the
+    constraints over attributes. A notable subclass hierarchy is `Attr`, which
+    stands for constraints for attributes whose values are of common types.
 
 An operation is defined by specializing the `Op` class with concrete contents
 for all the fields it requires. For example, `tf.AvgPool` is defined as
@@ -117,7 +118,7 @@ window in `value`.
     Confined<I64ArrayAttr, [ArrayMinCount<4>]>:$ksize,
     Confined<I64ArrayAttr, [ArrayMinCount<4>]>:$strides,
     TF_AnyStrAttrOf<["SAME", "VALID"]>:$padding,
-    DefaultValuedAttr<TF_ConvnetDataFormatAttr, "NHWC">:$data_format
+    DefaultValuedAttr<TF_ConvertDataFormatAttr, "NHWC">:$data_format
   );
 
   let results = (outs
@@ -186,7 +187,6 @@ led by `ins`:
 let arguments = (ins
   <type-constraint>:$<operand-name>,
   ...
-
   <attr-constraint>:$<attr-name>,
   ...
 );
@@ -198,29 +198,30 @@ hierarchy. Similarly, `<attr-constraint>` is a TableGen `def` from the
 information.
 
 There is no requirements on the relative order of operands and attributes; they
-can mix freely. But it is recommended to put all operands ahead of attributes,
-and use an empty line to separate them to make it more visually distinguishable
-if possible. The relative order of operands themselves matters.
+can mix freely. The relative order of operands themselves matters. From each
+named argument a named getter will be generated that returns the argument with
+the return type (in the case of attributes the return type will be
+constructed from the storage type, while for operands it will be `Value`). Each
+attribute's raw value (e.g., as stored) can also be accessed via generated
+`<name>Attr` getters for use in transformation passes where the more user
+friendly return type is less suitable.
 
 All the arguments should be named to 1) provide documentation, 2) drive
 auto-generation of getter methods, 3) provide a handle to reference for other
 places like constraints.
-
-> * Place attributes after operands if possible
-> * Give operands and attribute proper names
 
 #### Variadic operands
 
 To declare a variadic operand, wrap the `TypeConstraint` for the operand with
 `Variadic<...>`.
 
-Normally operations have no variadic operands or just one variadic operand.
-For the latter case, it is easily deduce which dynamic operands are for the
-static variadic operand definition. But if an operation has more than one
-variadic operands, it would be impossible to attribute dynamic operands to the
+Normally operations have no variadic operands or just one variadic operand. For
+the latter case, it is easy to deduce which dynamic operands are for the static
+variadic operand definition. But if an operation has more than one variadic
+operands, it would be impossible to attribute dynamic operands to the
 corresponding static variadic operand definitions without further information
-from the operation. Therefore, the `SameVariadicOperandSize` trait is needed
-to indicate that all variadic operands have the same number of dynamic values.
+from the operation. Therefore, the `SameVariadicOperandSize` trait is needed to
+indicate that all variadic operands have the same number of dynamic values.
 
 #### Optional attributes
 
@@ -242,19 +243,21 @@ like `"0.5f"`, and an integer array default value should be specified as like
 `Confined` is provided as a general mechanism to help modelling further
 constraints on attributes beyond the ones brought by value types. You can use
 `Confined` to compose complex constraints out of more primitive ones. For
-example, a 32-bit integer attribute whose minimal value must be 10 can be
+example, a 32-bit integer attribute whose minimum value must be 10 can be
 expressed as `Confined<I32Attr, [IntMinValue<10>]>`.
 
 Right now, the following primitive constraints are supported:
 
-* `IntMinValue<N>`: Specifying an integer attribute to be greater than or equal
-  to `N`
-* `ArrayMinCount<N>`: Specifying an array attribute to have at least `N`
-  elements
-* `IntArrayNthElemEq<I, N>`: Specifying an integer array attribute's `I`-th
-  element to be equal to `N`
-* `IntArrayNthElemMinValue<I, N>`: Specifying an integer array attribute's
-  `I`-th element to be greater than or equal to `N`
+*   `IntMinValue<N>`: Specifying an integer attribute to be greater than or
+    equal to `N`
+*   `IntMaxValue<N>`: Specifying an integer attribute to be less than or equal
+    to `N`
+*   `ArrayMinCount<N>`: Specifying an array attribute to have at least `N`
+    elements
+*   `IntArrayNthElemEq<I, N>`: Specifying an integer array attribute's `I`-th
+    element to be equal to `N`
+*   `IntArrayNthElemMinValue<I, N>`: Specifying an integer array attribute's
+    `I`-th element to be greater than or equal to `N`
 
 TODO: Design and implement more primitive constraints
 
@@ -263,7 +266,7 @@ TODO: Design and implement more primitive constraints
 Similar to operands, results are specified inside the `dag`-typed `results`, led
 by `outs`:
 
-```tablgen
+```tablegen
 let results = (outs
   <type-constraint>:$<result-name>,
   ...
@@ -289,7 +292,7 @@ class. See [Constraints](#constraints) for more information.
 ### Operation interfaces
 
 [Operation interfaces](Interfaces.md#operation-interfaces) are a mechanism by
-which to opaquely call methods and access information on an *Op instance,
+which to opaquely call methods and access information on an *Op instance*,
 without knowing the exact operation type. Operation interfaces defined in C++
 can be accessed in the ODS framework via the `OpInterfaceTrait` class. Aside
 from using pre-existing interfaces in the C++ API, the ODS framework also
@@ -329,6 +332,17 @@ An `InterfaceMethod` is comprised of the following components:
         to the type of the derived operation currently being operated on.
     -   In non-static methods, a variable 'ConcreteOp op' is defined and may be
         used to refer to an instance of the derived operation.
+*   DefaultImplementation (Optional)
+    -   An optional explicit default implementation of the interface method.
+    -   This method is placed within the `Trait` class that is attached to the
+        operation. As such, this method has the same characteristics as any
+        other [`Trait`](Traits.md) method.
+    -   `ConcreteOp` is an implicitly defined typename that can be used to refer
+        to the type of the derived operation currently being operated on.
+
+ODS also allows generating the declarations for the `InterfaceMethod` of the op
+if one specifies the interface with `DeclareOpInterfaceMethods` (see example
+below).
 
 Examples:
 
@@ -367,30 +381,116 @@ def MyInterface : OpInterface<"MyInterface"> {
       "unsigned", "getNumInputsAndOutputs", (ins), [{
         return op.getNumInputs() + op.getNumOutputs();
     }]>,
+
+    // Provide only a default definition of the method.
+    // Note: `ConcreteOp` corresponds to the derived operation typename.
+    InterfaceMethod<"/*insert doc here*/",
+      "unsigned", "getNumInputsAndOutputs", (ins), /*methodBody=*/[{}], [{
+        ConcreteOp op = cast<ConcreteOp>(getOperation());
+        return op.getNumInputs() + op.getNumOutputs();
+    }]>,
   ];
+}
+
+// Interfaces can optionally be wrapped inside DeclareOpInterfaceMethods. This
+// would result in autogenerating declarations for members `foo`, `bar` and
+// `fooStatic`. Methods with bodies are not declared inside the op
+// declaration but instead handled by the op interface trait directly.
+def OpWithInferTypeInterfaceOp : Op<...
+    [DeclareOpInterfaceMethods<MyInterface>]> { ... }
+```
+
+### Builder methods
+
+For each operation, there are a few builders automatically generated based on
+the arguments and returns types. For example, given the following op definition:
+
+```tablegen
+def MyOp : ... {
+  let arguments = (ins
+    I32:$i32_operand,
+    F32:$f32_operand,
+    ...,
+
+    I32Attr:$i32_attr,
+    F32Attr:$f32_attr,
+    ...
+  );
+
+  let results = (outs
+    I32:$i32_result,
+    F32:$f32_result,
+    ...
+  );
 }
 ```
 
-### Custom builder methods
-
-For each operation, there are two builders automatically generated based on the
-arguments and returns types:
+The following builders are generated:
 
 ```c++
-static void build(Builder *, OperationState &tblgen_state,
-                  Type <result0-name>, Type <result1-name>, ...,
-                  Value <arg0-name>, Value <arg1-name>, ...,
-                  Attribute <attr0-name>, Attribute <attr1-name>, ...);
-
-static void build(Builder *, OperationState &tblgen_state,
+// All result-types/operands/attributes have one aggregate parameter.
+static void build(Builder *tblgen_builder, OperationState &tblgen_state,
                   ArrayRef<Type> resultTypes,
-                  ArrayRef<Value> operands,
+                  ValueRange operands,
                   ArrayRef<NamedAttribute> attributes);
+
+// Each result-type/operand/attribute has a separate parameter. The parameters
+// for attributes are of mlir::Attribute types.
+static void build(Builder *tblgen_builder, OperationState &tblgen_state,
+                  Type i32_result, Type f32_result, ...,
+                  Value *i32_operand, Value *f32_operand, ...,
+                  IntegerAttr i32_attr, FloatAttr f32_attr, ...);
+
+// Each result-type/operand/attribute has a separate parameter. The parameters
+// for attributes are raw values unwrapped with mlir::Attribute instances.
+// (Note that this builder will not always be generated. See the following
+// explanation for more details.)
+static void build(Builder *tblgen_builder, OperationState &tblgen_state,
+                  Type i32_result, Type f32_result, ...,
+                  Value *i32_operand, Value *f32_operand, ...,
+                  APInt i32_attr, StringRef f32_attr, ...);
+
+// Each operand/attribute has a separate parameter but result type is aggregate.
+static void build(Builder *tblgen_builder, OperationState &tblgen_state,
+                  ArrayRef<Type> resultTypes,
+                  Value *i32_operand, Value *f32_operand, ...,
+                  IntegerAttr i32_attr, FloatAttr f32_attr, ...);
+
+// All operands/attributes have aggregate parameters.
+// Generated if InferTypeOpInterface interface is specified.
+static void build(Builder *tblgen_builder, OperationState &tblgen_state,
+                  ValueRange operands,
+                  ArrayRef<NamedAttribute> attributes);
+
+// (And manually specified builders depending on the specific op.)
 ```
 
-The above cases make sure basic uniformity so that we can create ops using the
+The first form provides basic uniformity so that we can create ops using the
 same form regardless of the exact op. This is particularly useful for
 implementing declarative pattern rewrites.
+
+The second and third forms are good for use in manually written code given that
+they provide better guarantee via signatures.
+
+The third form will be generated if any of the op's attribute has different
+`Attr.returnType` from `Attr.storageType` and we know how to build an attribute
+from an unwrapped value (i.e., `Attr.constBuilderCall` is defined.)
+Additionally, for the third form, if an attribute appearing later in the
+`arguments` list has a default value, the default value will be supplied in the
+declaration. This works for `BoolAttr`, `StrAttr`, `EnumAttr` for now and the
+list can grow in the future. So if possible, default valued attribute should be
+placed at the end of the `arguments` list to leverage this feature. (This
+behavior is essentially due to C++ function parameter default value placement
+restrictions.) Otherwise, the builder of the third form will still be generated
+but default values for the attributes not at the end of the `arguments` list
+will not be supplied in the builder's signature.
+
+And there may potentially exist other builders depending on the specific op;
+please refer to the
+[generated C++ file](#run-mlir-tblgen-to-see-the-generated-content) for the
+complete list.
+
+#### Custom builder methods
 
 However, if the above cases cannot satisfy all needs, you can define additional
 convenience build methods with `OpBuilder`.
@@ -422,7 +522,7 @@ def MyOp : ... {
   let builders = [
     OpBuilder<"Builder *builder, OperationState &state, float val = 0.5f", [{
       state.addAttribute("attr", builder->getF32FloatAttr(val));
-    ]}>
+    }]>
   ];
 }
 ```
@@ -705,23 +805,35 @@ duplication, which is being worked on right now.
 
 ### Enum attributes
 
-Enum attributes can be defined using `EnumAttr`, which requires all its cases to
-be defined with `EnumAttrCase`. To facilitate the interaction between
-`EnumAttr`s and their C++ consumers, the [`EnumsGen`][EnumsGen] TableGen backend
-can generate a few common utilities, including an enum class,
-`llvm::DenseMapInfo` for the enum class, conversion functions from/to strings.
-This is controlled via the `-gen-enum-decls` and `-gen-enum-defs` command-line
-options of `mlir-tblgen`.
+Some attributes can only take values from an predefined enum, e.g., the
+comparison kind of a comparison op. To define such attributes, ODS provides
+several mechanisms: `StrEnumAttr`, `IntEnumAttr`, and `BitEnumAttr`.
+
+*   `StrEnumAttr`: each enum case is a string, the attribute is stored as a
+    [`StringAttr`][StringAttr] in the op.
+*   `IntEnumAttr`: each enum case is an integer, the attribute is stored as a
+    [`IntegerAttr`][IntegerAttr] in the op.
+*   `BitEnumAttr`: each enum case is a bit, the attribute is stored as a
+    [`IntegerAttr`][IntegerAttr] in the op.
+
+All these `*EnumAttr` attributes require fully specifying all of the allowed
+cases via their corresponding `*EnumAttrCase`. With this, ODS is able to
+generate additional verification to only accept allowed cases. To facilitate the
+interaction between `*EnumAttr`s and their C++ consumers, the
+[`EnumsGen`][EnumsGen] TableGen backend can generate a few common utilities: a
+C++ enum class, `llvm::DenseMapInfo` for the enum class, conversion functions
+from/to strings. This is controlled via the `-gen-enum-decls` and
+`-gen-enum-defs` command-line options of `mlir-tblgen`.
 
 For example, given the following `EnumAttr`:
 
 ```tablegen
-def CaseA: EnumAttrCase<"caseA", 0>;
-def CaseB: EnumAttrCase<"caseB", 10>;
+def Case15: I32EnumAttrCase<"Case15", 15>;
+def Case20: I32EnumAttrCase<"Case20", 20>;
 
-def MyEnum: EnumAttr<"MyEnum", "An example enum", [CaseA, CaseB]> {
+def MyIntEnum: I32EnumAttr<"MyIntEnum", "An example int enum",
+                           [Case15, Case20]> {
   let cppNamespace = "Outer::Inner";
-  let underlyingType = "uint64_t";
   let stringToSymbolFnName = "ConvertToEnum";
   let symbolToStringFnName = "ConvertToString";
 }
@@ -732,35 +844,39 @@ The following will be generated via `mlir-tblgen -gen-enum-decls`:
 ```c++
 namespace Outer {
 namespace Inner {
-// An example enum
-enum class MyEnum : uint64_t {
-  caseA = 0,
-  caseB = 10,
+// An example int enum
+enum class MyIntEnum : uint32_t {
+  Case15 = 15,
+  Case20 = 20,
 };
 
-llvm::StringRef ConvertToString(MyEnum);
-llvm::Optional<MyEnum> ConvertToEnum(llvm::StringRef);
+llvm::Optional<MyIntEnum> symbolizeMyIntEnum(uint32_t);
+llvm::StringRef ConvertToString(MyIntEnum);
+llvm::Optional<MyIntEnum> ConvertToEnum(llvm::StringRef);
+inline constexpr unsigned getMaxEnumValForMyIntEnum() {
+  return 20;
+}
+
 } // namespace Inner
 } // namespace Outer
 
 namespace llvm {
-template<> struct DenseMapInfo<Outer::Inner::MyEnum> {
-  using StorageInfo = llvm::DenseMapInfo<uint64_t>;
+template<> struct DenseMapInfo<Outer::Inner::MyIntEnum> {
+  using StorageInfo = llvm::DenseMapInfo<uint32_t>;
 
-  static inline Outer::Inner::MyEnum getEmptyKey() {
-    return static_cast<Outer::Inner::MyEnum>(StorageInfo::getEmptyKey());
+  static inline Outer::Inner::MyIntEnum getEmptyKey() {
+    return static_cast<Outer::Inner::MyIntEnum>(StorageInfo::getEmptyKey());
   }
 
-  static inline Outer::Inner::MyEnum getTombstoneKey() {
-    return static_cast<Outer::Inner::MyEnum>(StorageInfo::getTombstoneKey());
+  static inline Outer::Inner::MyIntEnum getTombstoneKey() {
+    return static_cast<Outer::Inner::MyIntEnum>(StorageInfo::getTombstoneKey());
   }
 
-  static unsigned getHashValue(const Outer::Inner::MyEnum &val) {
-    return StorageInfo::getHashValue(static_cast<uint64_t>(val));
+  static unsigned getHashValue(const Outer::Inner::MyIntEnum &val) {
+    return StorageInfo::getHashValue(static_cast<uint32_t>(val));
   }
 
-  static bool isEqual(const Outer::Inner::MyEnum &lhs,
-                      const Outer::Inner::MyEnum &rhs) {
+  static bool isEqual(const Outer::Inner::MyIntEnum &lhs, const Outer::Inner::MyIntEnum &rhs) {
     return lhs == rhs;
   }
 };
@@ -772,22 +888,131 @@ The following will be generated via `mlir-tblgen -gen-enum-defs`:
 ```c++
 namespace Outer {
 namespace Inner {
-llvm::StringRef ConvertToString(MyEnum val) {
+llvm::StringRef ConvertToString(MyIntEnum val) {
   switch (val) {
-    case MyEnum::caseA: return "caseA";
-    case MyEnum::caseB: return "caseB";
-    default: return "";
+    case MyIntEnum::Case15: return "Case15";
+    case MyIntEnum::Case20: return "Case20";
+  }
+  return "";
+}
+
+llvm::Optional<MyIntEnum> ConvertToEnum(llvm::StringRef str) {
+  return llvm::StringSwitch<llvm::Optional<MyIntEnum>>(str)
+      .Case("Case15", MyIntEnum::Case15)
+      .Case("Case20", MyIntEnum::Case20)
+      .Default(llvm::None);
+}
+llvm::Optional<MyIntEnum> symbolizeMyIntEnum(uint32_t value) {
+  switch (value) {
+  case 15: return MyIntEnum::Case15;
+  case 20: return MyIntEnum::Case20;
+  default: return llvm::None;
   }
 }
 
-llvm::Optional<MyEnum> ConvertToEnum(llvm::StringRef str) {
-  return llvm::StringSwitch<llvm::Optional<MyEnum>>(str)
-      .Case("caseA", MyEnum::caseA)
-      .Case("caseB", MyEnum::caseB)
-      .Default(llvm::None);
-}
 } // namespace Inner
 } // namespace Outer
+```
+
+Similarly for the following `BitEnumAttr` definition:
+
+```tablegen
+def None: BitEnumAttrCase<"None", 0x0000>;
+def Bit1: BitEnumAttrCase<"Bit1", 0x0001>;
+def Bit2: BitEnumAttrCase<"Bit2", 0x0002>;
+def Bit3: BitEnumAttrCase<"Bit3", 0x0004>;
+
+def MyBitEnum: BitEnumAttr<"MyBitEnum", "An example bit enum",
+                           [None, Bit1, Bit2, Bit3]>;
+```
+
+We can have:
+
+```c++
+// An example bit enum
+enum class MyBitEnum : uint32_t {
+  None = 0,
+  Bit1 = 1,
+  Bit2 = 2,
+  Bit3 = 4,
+};
+
+llvm::Optional<MyBitEnum> symbolizeMyBitEnum(uint32_t);
+std::string stringifyMyBitEnum(MyBitEnum);
+llvm::Optional<MyBitEnum> symbolizeMyBitEnum(llvm::StringRef);
+inline MyBitEnum operator|(MyBitEnum lhs, MyBitEnum rhs) {
+  return static_cast<MyBitEnum>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+}
+inline MyBitEnum operator&(MyBitEnum lhs, MyBitEnum rhs) {
+  return static_cast<MyBitEnum>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+}
+inline bool bitEnumContains(MyBitEnum bits, MyBitEnum bit) {
+  return (static_cast<uint32_t>(bits) & static_cast<uint32_t>(bit)) != 0;
+}
+
+namespace llvm {
+template<> struct DenseMapInfo<::MyBitEnum> {
+  using StorageInfo = llvm::DenseMapInfo<uint32_t>;
+
+  static inline ::MyBitEnum getEmptyKey() {
+    return static_cast<::MyBitEnum>(StorageInfo::getEmptyKey());
+  }
+
+  static inline ::MyBitEnum getTombstoneKey() {
+    return static_cast<::MyBitEnum>(StorageInfo::getTombstoneKey());
+  }
+
+  static unsigned getHashValue(const ::MyBitEnum &val) {
+    return StorageInfo::getHashValue(static_cast<uint32_t>(val));
+  }
+
+  static bool isEqual(const ::MyBitEnum &lhs, const ::MyBitEnum &rhs) {
+    return lhs == rhs;
+  }
+};
+```
+
+```c++
+std::string stringifyMyBitEnum(MyBitEnum symbol) {
+  auto val = static_cast<uint32_t>(symbol);
+  // Special case for all bits unset.
+  if (val == 0) return "None";
+
+  llvm::SmallVector<llvm::StringRef, 2> strs;
+  if (1u & val) { strs.push_back("Bit1"); val &= ~1u; }
+  if (2u & val) { strs.push_back("Bit2"); val &= ~2u; }
+  if (4u & val) { strs.push_back("Bit3"); val &= ~4u; }
+
+  if (val) return "";
+  return llvm::join(strs, "|");
+}
+
+llvm::Optional<MyBitEnum> symbolizeMyBitEnum(llvm::StringRef str) {
+  // Special case for all bits unset.
+  if (str == "None") return MyBitEnum::None;
+
+  llvm::SmallVector<llvm::StringRef, 2> symbols;
+  str.split(symbols, "|");
+
+  uint32_t val = 0;
+  for (auto symbol : symbols) {
+    auto bit = llvm::StringSwitch<llvm::Optional<uint32_t>>(symbol)
+      .Case("Bit1", 1)
+      .Case("Bit2", 2)
+      .Case("Bit3", 4)
+      .Default(llvm::None);
+    if (bit) { val |= *bit; } else { return llvm::None; }
+  }
+  return static_cast<MyBitEnum>(val);
+}
+
+llvm::Optional<MyBitEnum> symbolizeMyBitEnum(uint32_t value) {
+  // Special case for all bits unset.
+  if (value == 0) return MyBitEnum::None;
+
+  if (value & ~(1u | 2u | 4u)) return llvm::None;
+  return static_cast<MyBitEnum>(value);
+}
 ```
 
 TODO(b/132506080): This following is outdated. Update it.
@@ -803,6 +1028,37 @@ between the internal storage and the helper method. Derived attributes are a
 special class of attributes that do not have storage but are instead calculated
 based on the operation and its attributes.
 
+## Debugging Tips
+
+### Run `mlir-tblgen` to see the generated content
+
+TableGen syntax sometimes can be obscure; reading the generated content can be
+a very helpful way to understand and debug issues. To build `mlir-tblgen`, run
+`cmake --build . --target mlir-tblgen` in your build directory and find the
+`mlir-tblgen` binary in the `bin/` subdirectory. All the supported generators
+can be found via `mlir-tblgen --help`. For example, `--gen-op-decls` and
+`--gen-op-defs` as explained in [Generated C++ code](#generated-c++-code).
+
+To see the generated code, invoke `mlir-tblgen` with a specific generator by
+providing include paths via `-I`. For example,
+
+```sh
+# To see op C++ class declaration
+mlir-tblgen --gen-op-decls -I /path/to/mlir/include /path/to/input/td/file
+# To see op C++ class definition
+mlir-tblgen --gen-op-defs -I /path/to/mlir/include /path/to/input/td/file
+# To see op documentation
+mlir-tblgen --gen-op-doc -I /path/to/mlir/include /path/to/input/td/file
+
+# To see op interface C++ class declaration
+mlir-tblgen --gen-op-interface-decls -I /path/to/mlir/include /path/to/input/td/file
+# To see op interface C++ class definition
+mlir-tblgen --gen-op-interface-defs -I /path/to/mlir/include /path/to/input/td/file
+# To see op interface documentation
+mlir-tblgen --gen-op-interface-doc -I /path/to/mlir/include /path/to/input/td/file
+```
+
+
 ## Appendix
 
 ### Requirements and existing mechanisms analysis
@@ -816,53 +1072,54 @@ possible).
 We considered the approaches of several contemporary systems and focused on
 requirements that were desirable:
 
-* Ops registered using a registry separate from C++ code.
-  * Unknown ops are allowed in MLIR, so ops need not be registered. The
-    ability of the compiler to optimize those ops or graphs containing those
-    ops is constrained but correct.
-  * The current proposal does not include a runtime op description, but it
-    does not preclude such description, it can be added later.
-  * The op registry is essential for generating C++ classes that make
-    manipulating ops, verifying correct construction etc. in C++ easier by
-    providing a typed representation and accessors.
-* The op registry will be defined in
-  [TableGen](https://llvm.org/docs/TableGen/index.html) and be used to
-  generate C++ classes and utility functions
-  (builder/verifier/parser/printer).
-  * TableGen is a modelling specification language used by LLVM's backends
-    and fits in well with trait based modelling. This is an implementation
-    decision and there are alternative ways of doing this. But the
-    specification language is good for the requirements of modelling the
-    traits (as seen from usage in LLVM processor backend modelling) and easy
-    to extend, so a practical choice. If another good option comes up, we
-    will consider it.
-* MLIR allows both defined and undefined ops.
-  * Defined ops should have fixed semantics and could have a corresponding
-    reference implementation defined using, for example, EDSC.
-  * Dialects are under full control of the dialect owner and normally live
-    with the framework of the dialect.
-* The op's traits (e.g., commutative) are modelled along with the op in
-  the registry.
-* The op's operand/return type constraints are modelled along with the op in
-  the registry (see [Shape inference](#shape-inference) discussion below),
-  this allows (e.g.) optimized concise syntax in textual dumps.
-* Behavior of the op is documented along with the op with a summary and a
-  description. The description is written in markdown and extracted for
-  inclusion in the generated LangRef section of the dialect.
-* The generic assembly form of printing and parsing is available as normal,
-  but a custom parser and printer can either be specified or automatically
-  generated from an optional string representation showing the mapping of the
-  "assembly" string to operands/type.
-  * Parser-level remappings (e.g., `eq` to enum) will be supported as part
-    of the parser generation.
-* Matching patterns are specified separately from the op description.
-  * Contrasted with LLVM there is no "base" set of ops that every backend
-    needs to be aware of. Instead there are many different dialects and the
-    transformations/legalizations between these dialects form a graph of
-    transformations.
-* Reference implementation may be provided along with the op definition.
-  * The reference implementation may be in terms of either standard ops or
-    other reference implementations.
+*   Ops registered using a registry separate from C++ code.
+    *   Unknown ops are allowed in MLIR, so ops need not be registered. The
+        ability of the compiler to optimize those ops or graphs containing those
+        ops is constrained but correct.
+    *   The current proposal does not include a runtime op description, but it
+        does not preclude such description, it can be added later.
+    *   The op registry is essential for generating C++ classes that make
+        manipulating ops, verifying correct construction etc. in C++ easier by
+        providing a typed representation and accessors.
+*   The op registry will be defined in
+    [TableGen](https://llvm.org/docs/TableGen/index.html) and be used to
+    generate C++ classes and utility functions
+    (builder/verifier/parser/printer).
+    *   TableGen is a modelling specification language used by LLVM's backends
+        and fits in well with trait-based modelling. This is an implementation
+        decision and there are alternative ways of doing this. But the
+        specification language is good for the requirements of modelling the
+        traits (as seen from usage in LLVM processor backend modelling) and easy
+        to extend, so a practical choice. If another good option comes up, we
+        will consider it.
+*   MLIR allows both defined and undefined ops.
+    *   Defined ops should have fixed semantics and could have a corresponding
+        reference implementation defined using, for example, EDSC.
+    *   Dialects are under full control of the dialect owner and normally live
+        with the framework of the dialect.
+*   The op's traits (e.g., commutative) are modelled along with the op in the
+    registry.
+*   The op's operand/return type constraints are modelled along with the op in
+    the registry (see [Shape inference](#shape-inference) discussion below),
+    this allows (e.g.) optimized concise syntax in textual dumps.
+*   Behavior of the op is documented along with the op with a summary and a
+    description. The description is written in markdown and extracted for
+    inclusion in the generated LangRef section of the dialect.
+*   The generic assembly form of printing and parsing is available as normal,
+    but a custom parser and printer can either be specified or automatically
+    generated from an optional string representation showing the mapping of the
+    "assembly" string to operands/type.
+    *   Parser-level remappings (e.g., `eq` to enum) will be supported as part
+        of the parser generation.
+*   Matching patterns are specified separately from the op description.
+    *   Contrasted with LLVM there is no "base" set of ops that every backend
+        needs to be aware of. Instead there are many different dialects and the
+        transformations/legalizations between these dialects form a graph of
+        transformations.
+*   Reference implementation may be provided along with the op definition.
+
+    *   The reference implementation may be in terms of either standard ops or
+        other reference implementations.
 
     TODO: document expectation if the dependent op's definition changes.
 
@@ -943,7 +1200,6 @@ function, the reference implementation of the operation will be used to derive
 the shape function. The reference implementation is general and can support the
 arbitrary computations needed to specify output shapes.
 
-
 [TableGen]: https://llvm.org/docs/TableGen/index.html
 [TableGenIntro]: https://llvm.org/docs/TableGen/LangIntro.html
 [TableGenRef]: https://llvm.org/docs/TableGen/LangRef.html
@@ -951,3 +1207,5 @@ arbitrary computations needed to specify output shapes.
 [OpBase]: https://github.com/tensorflow/mlir/blob/master/include/mlir/IR/OpBase.td
 [OpDefinitionsGen]: https://github.com/tensorflow/mlir/blob/master/tools/mlir-tblgen/OpDefinitionsGen.cpp
 [EnumsGen]: https://github.com/tensorflow/mlir/blob/master/tools/mlir-tblgen/EnumsGen.cpp
+[StringAttr]: https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#string-attribute
+[IntegerAttr]: https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#integer-attribute

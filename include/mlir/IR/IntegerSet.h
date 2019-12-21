@@ -21,7 +21,7 @@
 // other operations. It is typically expected to contain only a handful of
 // affine constraints, and is immutable like an affine map. Integer sets are not
 // unique'd - although affine expressions that make up its equalities and
-// inequalites are themselves unique.
+// inequalities are themselves unique.
 
 // This class is not meant for affine analysis and operations like set
 // operations, emptiness checks, or other math operations for analysis and
@@ -108,7 +108,7 @@ public:
 
   /// Walk all of the AffineExpr's in this set's constraints. Each node in an
   /// expression tree is visited in postorder.
-  void walkExprs(llvm::function_ref<void(AffineExpr)> callback) const;
+  void walkExprs(function_ref<void(AffineExpr)> callback) const;
 
   void print(raw_ostream &os) const;
   void dump() const;

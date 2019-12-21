@@ -3,7 +3,7 @@
 // -----
 
 func @func_op() {
-  // expected-error@+1 {{expected non-function type}}
+  // expected-error@+1 {{expected valid '@'-identifier for symbol name}}
   func missingsigil() -> (i1, index, f32)
   return
 }
@@ -48,4 +48,28 @@ func @func_op() {
     return
   }
   return
+}
+
+// -----
+
+// expected-error@+1 {{expected non-function type}}
+func @f() -> (foo
+
+// -----
+
+// expected-error@+1 {{expected attribute name}}
+func @f() -> (i1 {)
+
+// -----
+
+// expected-error@+1 {{invalid to use 'test.invalid_attr'}}
+func @f(%arg0: i64 {test.invalid_attr}) {
+  return
+}
+
+// -----
+
+// expected-error@+1 {{invalid to use 'test.invalid_attr'}}
+func @f(%arg0: i64) -> (i64 {test.invalid_attr}) {
+  return %arg0 : i64
 }

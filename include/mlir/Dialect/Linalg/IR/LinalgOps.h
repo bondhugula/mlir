@@ -20,6 +20,7 @@
 
 #include "mlir/Dialect/Linalg/IR/LinalgTraits.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
@@ -44,15 +45,18 @@ namespace linalg {
 ///
 /// Examples:
 ///
-/// 1. linalg.fill(%A, %f) : !linalg.view<f32>, f32
+/// 1. linalg.fill(%A, %f) : memref<f32>, f32
 ///   name mangles into `linalg_fill_viewf32_f32_impl`
 ///
 /// 2. linalg.dot(%A, %B, %C) :
-///      !linalg.view<?xf32>, !linalg.view<?xf32>, !linalg.view<f32>
+///      memref<?xf32, stride_specification>,
+///      memref<?xf32, stride_specification>, memref<f32>
 ///   name mangles into `linalg_dot_viewxf32_viewxf32_viewf32_impl`
 ///
 /// 3. linalg.matmul(...) :
-///      !linalg.view<?x?xf32>, !linalg.view<?x?xf32>, !linalg.view<?x?xf32>
+///      memref<?x?xf32, stride_specification>,
+///      memref<?x?xf32, stride_specification>,
+///      memref<?x?xf32, stride_specification>
 ///   name mangles into `linalg_matmul_viewxxf32_viewxxf32_viewxxf32_impl`
 std::string generateLibraryCallName(Operation *op);
 
@@ -63,7 +67,7 @@ std::string generateLibraryCallName(Operation *op);
 /// `A(i, k) * B(k, j) -> C(i, j)` will have the following, ordered, list of
 /// affine maps:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    (
 ///      (i, j, k) -> (i, k),
 ///      (i, j, k) -> (k, j),
@@ -74,15 +78,13 @@ std::string generateLibraryCallName(Operation *op);
 /// Only permutation maps are currently supported.
 SmallVector<AffineMap, 4> loopToOperandRangesMaps(Operation *op);
 
-#include "mlir/Dialect/Linalg/IR/LinalgLibraryOpInterfaces.h.inc"
+#include "mlir/Dialect/Linalg/IR/LinalgStructuredOpsInterfaces.h.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h.inc"
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/Linalg/IR/LinalgLibraryOps.h.inc"
-
-llvm::raw_ostream &operator<<(llvm::raw_ostream &os, SubViewOp::Range &range);
+#include "mlir/Dialect/Linalg/IR/LinalgStructuredOps.h.inc"
 
 } // namespace linalg
 } // namespace mlir

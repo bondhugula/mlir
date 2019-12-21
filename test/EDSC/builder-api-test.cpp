@@ -18,10 +18,13 @@
 // RUN: mlir-edsc-builder-api-test | FileCheck %s
 
 #include "mlir/Dialect/AffineOps/AffineOps.h"
+#include "mlir/Dialect/Linalg/EDSC/Builders.h"
+#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
 #include "mlir/EDSC/Builders.h"
 #include "mlir/EDSC/Helpers.h"
 #include "mlir/EDSC/Intrinsics.h"
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/MLIRContext.h"
@@ -30,6 +33,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/Functional.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -70,10 +74,10 @@ TEST_FUNC(builder_dynamic_for_func_args) {
   ValueHandle f13(constant_float(llvm::APFloat(13.0f), f32Type));
   ValueHandle i7(constant_int(7, 32));
   ValueHandle i13(constant_int(13, 32));
-  LoopBuilder(&i, lb, ub, 3)([&] {
+  AffineLoopNestBuilder(&i, lb, ub, 3)([&] {
     lb *index_t(3) + ub;
     lb + index_t(3);
-    LoopBuilder(&j, lb, ub, 2)([&] {
+    AffineLoopNestBuilder(&j, lb, ub, 2)([&] {
       ceilDiv(index_t(31) * floorDiv(i + j * index_t(3), index_t(32)),
               index_t(32));
       ((f7 + f13) / f7) % f13 - f7 *f13;
@@ -118,13 +122,37 @@ TEST_FUNC(builder_dynamic_for) {
   ScopedContext scope(builder, f.getLoc());
   ValueHandle i(indexType), a(f.getArgument(0)), b(f.getArgument(1)),
       c(f.getArgument(2)), d(f.getArgument(3));
-  LoopBuilder(&i, a - b, c + d, 2)();
+  AffineLoopNestBuilder(&i, a - b, c + d, 2)();
 
   // clang-format off
   // CHECK-LABEL: func @builder_dynamic_for(%{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
   // CHECK-DAG:    [[r0:%[0-9]+]] = affine.apply ()[s0, s1] -> (s0 - s1)()[%{{.*}}, %{{.*}}]
   // CHECK-DAG:    [[r1:%[0-9]+]] = affine.apply ()[s0, s1] -> (s0 + s1)()[%{{.*}}, %{{.*}}]
   // CHECK-NEXT:   affine.for %{{.*}} = (d0) -> (d0)([[r0]]) to (d0) -> (d0)([[r1]]) step 2 {
+  // clang-format on
+  f.print(llvm::outs());
+  f.erase();
+}
+
+TEST_FUNC(builder_loop_for) {
+  using namespace edsc;
+  using namespace edsc::op;
+  using namespace edsc::intrinsics;
+  auto indexType = IndexType::get(&globalContext());
+  auto f = makeFunction("builder_loop_for", {},
+                        {indexType, indexType, indexType, indexType});
+
+  OpBuilder builder(f.getBody());
+  ScopedContext scope(builder, f.getLoc());
+  ValueHandle i(indexType), a(f.getArgument(0)), b(f.getArgument(1)),
+      c(f.getArgument(2)), d(f.getArgument(3));
+  LoopNestBuilder(&i, a - b, c + d, a)();
+
+  // clang-format off
+  // CHECK-LABEL: func @builder_loop_for(%{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
+  // CHECK-DAG:    [[r0:%[0-9]+]] = affine.apply ()[s0, s1] -> (s0 - s1)()[%{{.*}}, %{{.*}}]
+  // CHECK-DAG:    [[r1:%[0-9]+]] = affine.apply ()[s0, s1] -> (s0 + s1)()[%{{.*}}, %{{.*}}]
+  // CHECK-NEXT:   loop.for %{{.*}} = [[r0]] to [[r1]] step {{.*}} {
   // clang-format on
   f.print(llvm::outs());
   f.erase();
@@ -142,7 +170,7 @@ TEST_FUNC(builder_max_min_for) {
   ScopedContext scope(builder, f.getLoc());
   ValueHandle i(indexType), lb1(f.getArgument(0)), lb2(f.getArgument(1)),
       ub1(f.getArgument(2)), ub2(f.getArgument(3));
-  LoopBuilder(&i, {lb1, lb2}, {ub1, ub2}, 1)();
+  AffineLoopNestBuilder(&i, {lb1, lb2}, {ub1, ub2}, 1)();
   ret();
 
   // clang-format off
@@ -343,11 +371,11 @@ TEST_FUNC(builder_helpers) {
   lb2 = vA.lb(2);
   ub2 = vA.ub(2);
   step2 = vA.step(2);
-  LoopNestBuilder({&i, &j}, {lb0, lb1}, {ub0, ub1}, {step0, step1})([&]{
-    LoopBuilder(&k1, lb2, ub2, step2)([&]{
+  AffineLoopNestBuilder({&i, &j}, {lb0, lb1}, {ub0, ub1}, {step0, step1})([&]{
+    AffineLoopNestBuilder(&k1, lb2, ub2, step2)([&]{
       C(i, j, k1) = f7 + A(i, j, k1) + B(i, j, k1);
     });
-    LoopBuilder(&k2, lb2, ub2, step2)([&]{
+    AffineLoopNestBuilder(&k2, lb2, ub2, step2)([&]{
       C(i, j, k2) += A(i, j, k2) + B(i, j, k2);
     });
   });
@@ -392,7 +420,7 @@ TEST_FUNC(custom_ops) {
   OperationHandle ih0, ih2;
   IndexHandle m, n, M(f.getArgument(0)), N(f.getArgument(1));
   IndexHandle ten(index_t(10)), twenty(index_t(20));
-  LoopNestBuilder({&m, &n}, {M, N}, {M + ten, N + twenty}, {1, 1})([&]{
+  AffineLoopNestBuilder({&m, &n}, {M, N}, {M + ten, N + twenty}, {1, 1})([&]{
     vh = MY_CUSTOM_OP({m, m + n}, {indexType}, {});
     ih0 = MY_CUSTOM_OP_0({m, m + n}, {});
     ih2 = MY_CUSTOM_OP_2({m, m + n}, {indexType, indexType});
@@ -455,7 +483,7 @@ TEST_FUNC(select_op_i32) {
   MemRefView vA(f.getArgument(0));
   IndexedValue A(f.getArgument(0));
   IndexHandle i, j;
-  LoopNestBuilder({&i, &j}, {zero, zero}, {one, one}, {1, 1})([&]{
+  AffineLoopNestBuilder({&i, &j}, {zero, zero}, {one, one}, {1, 1})([&]{
     // This test exercises IndexedValue::operator Value*.
     // Without it, one must force conversion to ValueHandle as such:
     //   edsc::intrinsics::select(
@@ -490,7 +518,7 @@ TEST_FUNC(select_op_f32) {
   MemRefView vA(f.getArgument(0)), vB(f.getArgument(1));
   IndexedValue A(f.getArgument(0)), B(f.getArgument(1));
   IndexHandle i, j;
-  LoopNestBuilder({&i, &j}, {zero, zero}, {one, one}, {1, 1})([&]{
+  AffineLoopNestBuilder({&i, &j}, {zero, zero}, {one, one}, {1, 1})([&]{
 
     edsc::intrinsics::select(B(i, j) == B(i+one, j), *A(zero, zero), *A(i, j));
     edsc::intrinsics::select(B(i, j) != B(i+one, j), *A(zero, zero), *A(i, j));
@@ -568,11 +596,11 @@ TEST_FUNC(tile_2d) {
   IndexHandle i, j, k1, k2, M(vC.ub(0)), N(vC.ub(1)), O(vC.ub(2));
 
   // clang-format off
-  LoopNestBuilder({&i, &j}, {zero, zero}, {M, N}, {1, 1})([&]{
-    LoopNestBuilder(&k1, zero, O, 1)([&]{
+  AffineLoopNestBuilder({&i, &j}, {zero, zero}, {M, N}, {1, 1})([&]{
+    AffineLoopNestBuilder(&k1, zero, O, 1)([&]{
       C(i, j, k1) = A(i, j, k1) + B(i, j, k1);
     });
-    LoopNestBuilder(&k2, zero, O, 1)([&]{
+    AffineLoopNestBuilder(&k2, zero, O, 1)([&]{
       C(i, j, k2) = A(i, j, k2) + B(i, j, k2);
     });
   });
@@ -645,8 +673,8 @@ TEST_FUNC(vectorize_2d) {
 
   // clang-format off
   IndexHandle i, j, k;
-  LoopNestBuilder({&i, &j, &k}, {zero, zero, zero}, {M, N, P}, {1, 1, 1})([&]{
-    C(i, j, k) = A(i, j, k) + B(i, j, k);
+  AffineLoopNestBuilder({&i, &j, &k}, {zero, zero, zero}, {M, N, P}, {1, 1,
+1})([&]{ C(i, j, k) = A(i, j, k) + B(i, j, k);
   });
   ret();
 
@@ -699,7 +727,7 @@ TEST_FUNC(indirect_access) {
   IndexHandle i, N(vC.ub(0));
 
   // clang-format off
-  LoopBuilder(&i, zero, N, 1)([&]{
+  AffineLoopNestBuilder(&i, zero, N, 1)([&]{
       C((ValueHandle)D(i)) = A((ValueHandle)B(i));
   });
   // clang-format on
@@ -733,7 +761,7 @@ TEST_FUNC(empty_map_load_store) {
   IndexHandle iv;
 
   // clang-format off
-  LoopBuilder(&iv, zero, one, 1)([&]{
+  AffineLoopNestBuilder(&iv, zero, one, 1)([&]{
       res() = input();
   });
   // clang-format on
@@ -772,11 +800,145 @@ TEST_FUNC(affine_if_op) {
       builder.getAffineSymbolExpr(0), // s0 >= 0
       builder.getAffineSymbolExpr(1)  // s1 >= 0
   };
-  auto intSet = builder.getIntegerSet(2, 2, affineExprs, isEq);
+  auto intSet = IntegerSet::get(2, 2, affineExprs, isEq);
 
   SmallVector<Value *, 4> affineIfArgs = {zero, zero, ten, ten};
   intrinsics::affine_if(intSet, affineIfArgs, /*withElseRegion=*/false);
   intrinsics::affine_if(intSet, affineIfArgs, /*withElseRegion=*/true);
+
+  f.print(llvm::outs());
+  f.erase();
+}
+
+// clang-format off
+// CHECK-LABEL: func @linalg_pointwise
+//       CHECK:   linalg.generic {args_in = 2 : i64, args_out = 1 : i64,
+// CHECK-SAME: indexing_maps = [(d0, d1) -> (d0, d1), (d0, d1) -> (d0, d1), (d0, d1) -> (d0, d1)],
+// CHECK-SAME: iterator_types = ["parallel", "parallel"]}
+//       CHECK:       addf
+//       CHECK:     }: memref<?x?xf32>, memref<?x?xf32>, memref<?x?xf32>
+//       CHECK:   linalg.generic {args_in = 2 : i64, args_out = 1 : i64,
+// CHECK-SAME: indexing_maps = [(d0, d1) -> (d0, d1), (d0, d1) -> (d0, d1), (d0, d1) -> (d0, d1)],
+// CHECK-SAME: iterator_types = ["parallel", "parallel"]}
+//       CHECK:       cmpf "ogt"
+//       CHECK:       select
+//       CHECK:   }: memref<?x?xf32>, memref<?x?xf32>, memref<?x?xf32>
+//       CHECK:   linalg.generic {args_in = 1 : i64, args_out = 1 : i64,
+// CHECK-SAME:      indexing_maps = [(d0, d1) -> (d0, d1), (d0, d1) -> (d0, d1)],
+// CHECK-SAME:      iterator_types = ["parallel", "parallel"]}
+//       CHECK:     tanh
+//       CHECK:   }: memref<?x?xf32>, memref<?x?xf32>
+// clang-format on
+TEST_FUNC(linalg_pointwise_test) {
+  using namespace edsc;
+  using namespace edsc::ops;
+
+  auto f32Type = FloatType::getF32(&globalContext());
+  auto memrefType = MemRefType::get({-1, -1}, f32Type, {}, 0);
+  auto f = makeFunction("linalg_pointwise", {},
+                        {memrefType, memrefType, memrefType});
+
+  OpBuilder builder(f.getBody());
+  ScopedContext scope(builder, f.getLoc());
+  ValueHandle A(f.getArgument(0)), B(f.getArgument(1)), C(f.getArgument(2));
+  AffineExpr i, j;
+  bindDims(&globalContext(), i, j);
+  StructuredIndexed SA(A), SB(B), SC(C);
+  linalg_pointwise_add(SA({i, j}), SB({i, j}), SC({i, j}));
+  linalg_pointwise_max(SA({i, j}), SB({i, j}), SC({i, j}));
+  linalg_pointwise_tanh(SA({i, j}), SC({i, j}));
+
+  f.print(llvm::outs());
+  f.erase();
+}
+
+// clang-format off
+// CHECK-LABEL: func @linalg_matmul
+//       CHECK:   linalg.generic {args_in = 2 : i64, args_out = 1 : i64,
+// CHECK-SAME: indexing_maps = [(d0, d1, d2) -> (d0, d2), (d0, d1, d2) -> (d2, d1), (d0, d1, d2) -> (d0, d1)],
+// CHECK-SAME: iterator_types = ["parallel", "parallel", "reduction"]}
+///      CHECK:   ^bb1(%[[a0:.*]]: f32, %[[a1:.*]]: f32, %[[a2:.*]]: f32):
+//       CHECK:     %[[a3:.*]] = mulf %[[a0]], %[[a1]] : f32
+//       CHECK:     %[[a4:.*]] = addf %[[a2]], %[[a3]] : f32
+//       CHECK:     linalg.yield %[[a4]] : f32
+//       CHECK:   }: memref<?x?xf32>, memref<?x?xf32>, memref<?x?xf32>
+// clang-format on
+TEST_FUNC(linalg_matmul_test) {
+  using namespace edsc;
+  using namespace edsc::ops;
+
+  auto f32Type = FloatType::getF32(&globalContext());
+  auto memrefType = MemRefType::get({-1, -1}, f32Type, {}, 0);
+  auto f =
+      makeFunction("linalg_matmul", {}, {memrefType, memrefType, memrefType});
+
+  OpBuilder builder(f.getBody());
+  ScopedContext scope(builder, f.getLoc());
+  linalg_matmul(makeValueHandles(llvm::to_vector<3>(f.getArguments())));
+
+  f.print(llvm::outs());
+  f.erase();
+}
+
+// clang-format off
+// CHECK-LABEL: func @linalg_conv_nhwc
+//       CHECK:   linalg.generic {args_in = 2 : i64, args_out = 1 : i64,
+// CHECK-SAME: indexing_maps = [(d0, d1, d2, d3, d4, d5, d6) -> (d0, d2 * 3 + d4 * 5, d3 * 4 + d5 * 6, d6),
+// CHECK-SAME: (d0, d1, d2, d3, d4, d5, d6) -> (d4, d5, d6, d1),
+// CHECK-SAME: (d0, d1, d2, d3, d4, d5, d6) -> (d0, d2, d3, d1)],
+// CHECK-SAME: iterator_types = ["parallel", "parallel", "parallel", "parallel", "reduction", "reduction", "reduction"]}
+///      CHECK:   ^bb1(%[[a0:.*]]: f32, %[[a1:.*]]: f32, %[[a2:.*]]: f32):
+//       CHECK:     %[[a3:.*]] = mulf %[[a0]], %[[a1]] : f32
+//       CHECK:     %[[a4:.*]] = addf %[[a2]], %[[a3]] : f32
+//       CHECK:     linalg.yield %[[a4]] : f32
+//       CHECK:   }: memref<?x?x?x?xf32>, memref<?x?x?x?xf32>, memref<?x?x?x?xf32>
+// clang-format on
+TEST_FUNC(linalg_conv_nhwc) {
+  using namespace edsc;
+  using namespace edsc::ops;
+
+  auto f32Type = FloatType::getF32(&globalContext());
+  auto memrefType = MemRefType::get({-1, -1, -1, -1}, f32Type, {}, 0);
+  auto f = makeFunction("linalg_conv_nhwc", {},
+                        {memrefType, memrefType, memrefType});
+
+  OpBuilder builder(f.getBody());
+  ScopedContext scope(builder, f.getLoc());
+  linalg_conv_nhwc(makeValueHandles(llvm::to_vector<3>(f.getArguments())),
+                   /*strides=*/{3, 4}, /*dilations=*/{5, 6});
+
+  f.print(llvm::outs());
+  f.erase();
+}
+
+// clang-format off
+// CHECK-LABEL: func @linalg_dilated_conv_nhwc
+//       CHECK:   linalg.generic {args_in = 2 : i64, args_out = 1 : i64,
+// CHECK-SAME: indexing_maps = [(d0, d1, d2, d3, d4, d5, d6) -> (d0, d3 * 3 + d5 * 5, d4 * 4 + d6 * 6, d2),
+// CHECK-SAME: (d0, d1, d2, d3, d4, d5, d6) -> (d5, d6, d2, d1),
+// CHECK-SAME: (d0, d1, d2, d3, d4, d5, d6) -> (d0, d3, d4, d1 + d2 * 7)],
+// CHECK-SAME: iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel", "reduction", "reduction"]}
+///      CHECK:   ^bb1(%[[a0:.*]]: f32, %[[a1:.*]]: f32, %[[a2:.*]]: f32):
+//       CHECK:     %[[a3:.*]] = mulf %[[a0]], %[[a1]] : f32
+//       CHECK:     %[[a4:.*]] = addf %[[a2]], %[[a3]] : f32
+//       CHECK:     linalg.yield %[[a4]] : f32
+//       CHECK:   }: memref<?x?x?x?xf32>, memref<?x?x?x?xf32>, memref<?x?x?x?xf32>
+// clang-format on
+TEST_FUNC(linalg_dilated_conv_nhwc) {
+  using namespace edsc;
+  using namespace edsc::ops;
+
+  auto f32Type = FloatType::getF32(&globalContext());
+  auto memrefType = MemRefType::get({-1, -1, -1, -1}, f32Type, {}, 0);
+  auto f = makeFunction("linalg_dilated_conv_nhwc", {},
+                        {memrefType, memrefType, memrefType});
+
+  OpBuilder builder(f.getBody());
+  ScopedContext scope(builder, f.getLoc());
+  linalg_dilated_conv_nhwc(
+      makeValueHandles(llvm::to_vector<3>(f.getArguments())),
+      /*depth_multiplier=*/7,
+      /*strides=*/{3, 4}, /*dilations=*/{5, 6});
 
   f.print(llvm::outs());
   f.erase();

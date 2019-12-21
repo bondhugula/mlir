@@ -26,10 +26,11 @@
 
 namespace mlir {
 class Pass;
-} // namespace mlir
 
 namespace toy {
-std::unique_ptr<mlir::Pass> createShapeInferencePass();
-} // namespace toy
+std::unique_ptr<Pass> createShapeInferencePass();
+std::unique_ptr<Pass> createDeadFunctionEliminationPass();
+} // end namespace toy
+} // end namespace mlir
 
 #endif // MLIR_TUTORIAL_TOY_PASSES_H

@@ -3,7 +3,7 @@
 // -----
 
 func @module_op() {
-  // expected-error@+1 {{expects region #0 to have 0 or 1 blocks}}
+  // expected-error@+1 {{Operations with a 'SymbolTable' must have exactly one block}}
   module {
   ^bb1:
     "module_terminator"() : () -> ()
@@ -27,8 +27,8 @@ func @module_op() {
 // -----
 
 func @module_op() {
-  // expected-error@+2 {{expects regions to end with 'module_terminator'}}
-  // expected-note@+1 {{the absence of terminator implies 'module_terminator'}}
+  // expected-error@below {{expects regions to end with 'module_terminator'}}
+  // expected-note@below {{the absence of terminator implies 'module_terminator'}}
   module {
     return
   }

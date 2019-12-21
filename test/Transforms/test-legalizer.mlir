@@ -74,11 +74,24 @@ func @remap_moved_region_args() {
   return
 }
 
+// CHECK-LABEL: func @remap_cloned_region_args
+func @remap_cloned_region_args() {
+  // CHECK-NEXT: return
+  // CHECK-NEXT: ^bb1(%{{.*}}: f64, %{{.*}}: f64, %{{.*}}: f16, %{{.*}}: f16):
+  // CHECK-NEXT: "test.cast"{{.*}} : (f16, f16) -> f32
+  // CHECK-NEXT: "test.valid"{{.*}} : (f64, f64, f32)
+  "test.region"() ({
+    ^bb1(%i0: i64, %unused: i16, %i1: i64, %2: f32):
+      "test.invalid"(%i0, %i1, %2) : (i64, i64, f32) -> ()
+  }) {legalizer.should_clone} : () -> ()
+  return
+}
+
 // CHECK-LABEL: func @remap_drop_region
 func @remap_drop_region() {
   // CHECK-NEXT: return
   // CHECK-NEXT: }
-  "test.drop_op"() ({
+  "test.drop_region_op"() ({
     ^bb1(%i0: i64, %unused: i16, %i1: i64, %2: f32):
       "test.invalid"(%i0, %i1, %2) : (i64, i64, f32) -> ()
   }) : () -> ()
@@ -98,6 +111,16 @@ func @up_to_date_replacement(%arg: i8) -> i8 {
   %repl_1 = "test.rewrite"(%arg) : (i8) -> i8
   %repl_2 = "test.rewrite"(%repl_1) : (i8) -> i8
   return %repl_2 : i8
+}
+
+// CHECK-LABEL: func @remove_foldable_op
+// CHECK-SAME:                          (%[[ARG_0:[a-z0-9]*]]: i32)
+func @remove_foldable_op(%arg0 : i32) -> (i32) {
+  // CHECK-NEXT: return %[[ARG_0]]
+  %0 = "test.op_with_region_fold"(%arg0) ({
+    "foo.op_with_region_terminator"() : () -> ()
+  }) : (i32) -> (i32)
+  return %0 : i32
 }
 
 // -----
@@ -123,9 +146,9 @@ func @fail_to_convert_illegal_op_in_region() {
 
 // CHECK-LABEL: func @fail_to_convert_region
 func @fail_to_convert_region() {
-  // CHECK-NEXT: "test.drop_op"
+  // CHECK-NEXT: "test.region"
   // CHECK-NEXT: ^bb{{.*}}(%{{.*}}: i64):
-  "test.drop_op"() ({
+  "test.region"() ({
     ^bb1(%i0: i64):
       // expected-error@+1 {{failed to legalize operation 'test.region_builder'}}
       "test.region_builder"() : () -> ()

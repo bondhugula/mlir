@@ -20,51 +20,23 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifdef LINALG_LIBRARY_OPS
-#else
+#ifndef LINALG_LIBRARY_OPS
 #define LINALG_LIBRARY_OPS
 
 include "mlir/Dialect/AffineOps/AffineOpsBase.td"
 include "mlir/Dialect/Linalg/IR/LinalgBase.td"
 
-class LinalgParametricNativeOpTrait<string prop, string parameters> :
-  NativeOpTrait<"linalg::" # prop # parameters>
-{}
-
-class LinalgParametricIntNativeOpTrait<string prop, list<int> parameters> :
-  LinalgParametricNativeOpTrait<
-    prop,
-    !strconcat("<",
-               !cast<string>(!head(parameters)),
-               !foldl("",
-                      !tail(parameters),
-                      sum,
-                      param,
-                      sum # "," # !cast<string>(param)),
-               ">::Impl")>
-{}
-
-// The Linalg `NInputsAndOutputs` trait provides the API for ops that are known
-// to have a specified number of inputs and outputs, all passed as operands.
+// The Linalg `NInputs` trait provides the API for ops that are known
+// to have a specified number of inputs, all passed as operands.
 // See Linalg/LinalgTraits.h for implementation details an usage.
-class NInputsAndOutputs<int n_ins, int n_outs> :
-  LinalgParametricIntNativeOpTrait<"NInputsAndOutputs", [n_ins, n_outs]>
-{}
+class NInputs<int args_in> :
+  NativeOpTrait<"linalg::NInputs<" # !cast<string>(args_in) # ">::Impl"> {}
 
-// The linalg `NLoopTypes` trait provides the API for ops that are known to have
-// a specified number of parallel (n_par), reduction (n_red) and window (n_win)
-// loops.
+// The Linalg `NOutputs` trait provides the API for ops that are known
+// to have a specified number of outputs, all passed as operands.
 // See Linalg/LinalgTraits.h for implementation details an usage.
-class NLoopTypes<int n_par, int n_red, int n_win> :
-LinalgParametricIntNativeOpTrait<"NLoopTypes", [n_par, n_red, n_win]>
-{}
-
-// The linalg `ViewRanks` trait the API for ops that are known to have a
-// specified list of view ranks.
-// See Linalg/LinalgTraits.h for implementation details an usage.
-class ViewRanks<list<int> ranks> :
-LinalgParametricIntNativeOpTrait<"ViewRanks", ranks>
-{}
+class NOutputs<int args_out> :
+  NativeOpTrait<"linalg::NOutputs<" # !cast<string>(args_out) # ">::Impl"> {}
 
 def ViewTraits : NativeOpTrait<"linalg::ViewTraits">;
 
@@ -72,7 +44,6 @@ def ViewTraits : NativeOpTrait<"linalg::ViewTraits">;
 // interface.
 def LinalgLibraryInterface : OpInterface<"LinalgOp"> {
   let methods = [
-    /// Query the number of inputs and outputs from the operation.
     InterfaceMethod<
       "Query the number of inputs from the current operation.",
       "unsigned", "getNumInputs"
@@ -97,8 +68,14 @@ def LinalgLibraryInterface : OpInterface<"LinalgOp"> {
       "Query the input and output operands from the current operation.",
       "Operation::operand_range", "getInputsAndOutputs"
     >,
-
-    /// Query the number of each type of loop.
+    InterfaceMethod<
+      "Query the iterator types attribute within the current operation.",
+      "ArrayAttr", "iterator_types"
+    >,
+    InterfaceMethod<
+      "Query the indexing maps attribute within the current operation.",
+      "ArrayAttr", "indexing_maps"
+    >,
     InterfaceMethod<
       "Query the number of parallel loops within the current operation.",
       "unsigned", "getNumParallelLoops"
@@ -113,49 +90,39 @@ def LinalgLibraryInterface : OpInterface<"LinalgOp"> {
     >,
     InterfaceMethod<
       "Query the number of loops within the current operation.",
-      "unsigned", "getNumLoops", (ins), [{
-      return op.getNumParallelLoops() + op.getNumReductionLoops() +
-             op.getNumWindowLoops();
-    }]>,
-
-    /// Get a specific input/output at the given index.
-    InterfaceMethod<"Query the input for the given index.",
+      "unsigned", "getNumLoops">,
+    InterfaceMethod<"Query the input view at the given index.",
       "Value *", "getInput", (ins "unsigned":$i)
     >,
-    InterfaceMethod<"Query the output for the given index.",
+    InterfaceMethod<"Query the output view at the given index.",
       "Value *", "getOutput", (ins "unsigned":$i)
     >,
-
-    /// Get the index of the given value, or None if the value is not an input.
     InterfaceMethod<[{
         Query the index of the given input value, or `None` if the value is not
         an input.
       }],
-      "llvm::Optional<unsigned>", "getIndexOfInput", (ins "Value *":$view)
+      "Optional<unsigned>", "getIndexOfInput", (ins "Value *":$view)
     >,
     InterfaceMethod<[{
         Query the index of the given view value, or `None` if the value is not
         an view.
       }],
-      "llvm::Optional<unsigned>", "getIndexOfOutput", (ins "Value *":$view)
+      "Optional<unsigned>", "getIndexOfOutput", (ins "Value *":$view)
     >,
+    InterfaceMethod<[{
+        Query the type of the input view at the given index.
+      }], "MemRefType", "getInputViewType", (ins "unsigned":$i)>,
+    InterfaceMethod<[{
+        Query the type of the output view at the given index.
+      }], "MemRefType", "getOutputViewType", (ins "unsigned":$i)>,
 
-    /// Get the view type of the input/output at the given index.
-    InterfaceMethod<"Query the view type for the given input.",
-      "ViewType", "getInputViewType", (ins "unsigned":$i)
-    >,
-    InterfaceMethod<"Query the view type for the given output.",
-      "ViewType", "getOutputViewType", (ins "unsigned":$i)
-    >,
-
-    /// Create an operation with the given location and operands.
     StaticInterfaceMethod<[{
         Create an operation of the current type with the given location,
         operands, and attributes.
       }],
       "Operation *", "create",
       (ins "OpBuilder &":$builder, "Location":$loc,
-           "ArrayRef<Value *>":$operands,
+           "ValueRange":$operands,
            "ArrayRef<NamedAttribute>":$attributes), [{
         return builder.create<ConcreteOp>(loc, ArrayRef<Type>{}, operands,
                                           attributes);
@@ -169,7 +136,7 @@ def LinalgLibraryInterface : OpInterface<"LinalgOp"> {
         is used to abstract away the optional underlying region creation.
       }],
       "Operation *", "clone",
-      (ins "OpBuilder &":$b, "Location":$loc, "ArrayRef<Value *>":$operands), [{
+      (ins "OpBuilder &":$b, "Location":$loc, "ValueRange":$operands), [{
         BlockAndValueMapping map;
         unsigned numRegions = op.getOperation()->getNumRegions();
         Operation *res = create(b, loc, operands, op.getAttrs());
@@ -206,44 +173,56 @@ class LinalgLibrary_Op<string mnemonic, list<OpTrait> props>
 ////////////////////////////////////////////////////////////////////////////////
 // Concrete Linalg ops.
 ////////////////////////////////////////////////////////////////////////////////
-def CopyOp : LinalgLibrary_Op<"copy", [NInputsAndOutputs<1, 1>]> {
+def CopyOp : LinalgLibrary_Op<"copy", [NInputs<1>, NOutputs<1>]> {
   let description = [{
     Copies the data in the input view into the output view.
 
     Usage:
-      linalg.copy(%arg0, %arg1) : !linalg.view<?xf32>, !linalg.view<?xf32>
+      ```mlir
+      linalg.copy(%arg0, %arg1) : memref<?xf32, stride_specification>,
+                                  memref<?xf32, stride_specification>
+      ```
 
     One possible lowering to loop form is:
+      ```mlir
       %0 = linalg.dim %arg0, 0 : index
       loop.for %i0 = %c0 to %0 step %c1 {
-        %1 = linalg.load %arg0[%i0] : !linalg.view<?xf32>
-        linalg.store %1, %arg1[%i0] : !linalg.view<?xf32>
+        %1 = linalg.load %arg0[%i0] : memref<?xf32, stride_specification>
+        linalg.store %1, %arg1[%i0] : memref<?xf32, stride_specification>
       }
+      ```
 
     Optionally, can take `input_permutation` and `output_permutation` attributes
     to reorder the dimensions of the input and output views.
 
     Usage:
+      ```mlir
       linalg.copy(%arg0, %arg1) {inputPermutation : (i, j, k) -> (i, k, j),
                                  outputPermutation : (i, j, k) -> (k, j, i)} :
-        !linalg.view<?x?x?xf32>, !linalg.view<?x?x?xf32>
+        memref<?x?x?xf32, stride_specification>,
+        memref<?x?x?xf32, stride_specification>
+     ```
 
     One possible lowering to loop form is:
+      ```mlir
       %0 = linalg.dim %arg0, 0
       %1 = linalg.dim %arg0, 1
       %2 = linalg.dim %arg0, 2
       loop.for %i0 = %c0 to %{{.*}} step %c1 {
         loop.for %i1 = %c0 to %{{.*}} step %c1 {
           loop.for %i2 = %c0 to %{{.*}} step %c1 {
-            %3 = linalg.load %arg0[%i0, %i2, %i1] : !linalg.view<?x?x?xf32>
-            linalg.store %3, %arg1[%i2, %i1, %i0] : !linalg.view<?x?x?xf32>
+            %3 = linalg.load %arg0[%i0, %i2, %i1] :
+                    memref<?x?x?xf32, stride_specification>
+            linalg.store %3, %arg1[%i2, %i1, %i0] :
+                    memref<?x?x?xf32, stride_specification>
+      ```
 
     The views are expected to be compatible for correctness but this is not
     enforced at the moment.
   }];
   let arguments = (ins
-    View:$input,
-    View:$output,
+    AnyStridedMemRef:$input,
+    AnyStridedMemRef:$output,
     OptionalAttr<AffineMapAttr>:$inputPermutation,
     OptionalAttr<AffineMapAttr>:$outputPermutation);
   // TODO(ntv) this should go away once the usage of OptionalAttr triggers
@@ -254,57 +233,87 @@ def CopyOp : LinalgLibrary_Op<"copy", [NInputsAndOutputs<1, 1>]> {
       builder, result, input, output, AffineMapAttr(), AffineMapAttr());
   }]>];
   let extraClassDeclaration = libraryCallName # [{
-    unsigned getNumParallelLoops() {
-      auto *view = *(getOperands().begin());
-      return view->getType().cast<ViewType>().getRank();
+    ArrayAttr indexing_maps();
+
+    ArrayAttr iterator_types() {
+      unsigned nPar = input()->getType().cast<ShapedType>().getRank();
+      MLIRContext *ctx = getContext();
+      SmallVector<Attribute, 8> iters(
+        nPar, StringAttr::get(getParallelIteratorTypeName(), ctx));
+      return ArrayAttr::get(iters, ctx);
     }
-    unsigned getNumReductionLoops() { return 0; }
-    unsigned getNumWindowLoops() { return 0; }
   }];
   let verifier = [{ return ::verify(*this); }];
 }
 
-def FillOp : LinalgLibrary_Op<"fill", [NInputsAndOutputs<0, 1>]> {
-  let arguments = (ins View, AnyTypeOf<[AnyFloat, AnyInteger, AnyVector]>);
+def FillOp : LinalgLibrary_Op<"fill", [NInputs<0>, NOutputs<1>]> {
+  let arguments = (ins AnyStridedMemRef:$output,
+                   AnyTypeOf<[AnyFloat, AnyInteger, AnyVector]>:$value);
   let extraClassDeclaration = libraryCallName # [{
-    unsigned getNumParallelLoops() {
-      auto *view = *(getOperands().begin());
-      return view->getType().cast<ViewType>().getRank();
-    }
-    unsigned getNumReductionLoops() { return 0; }
-    unsigned getNumWindowLoops() { return 0; }
-    Value *getValue() {
-      return *(getOperands().begin() + getNumInputsAndOutputs());
+    ArrayAttr indexing_maps();
+
+    ArrayAttr iterator_types() {
+      unsigned nPar = output()->getType().cast<ShapedType>().getRank();
+      MLIRContext *ctx = getContext();
+      SmallVector<Attribute, 8> iters(
+        nPar, StringAttr::get(getParallelIteratorTypeName(), ctx));
+      return ArrayAttr::get(iters, ctx);
     }
   }];
   let verifier = [{ return ::verify(*this); }];
 }
 
-def DotOp : LinalgLibrary_Op<"dot",
-                            [NInputsAndOutputs<2, 1>,
-                             NLoopTypes<0, 1, 0>,
-                             ViewRanks<[1, 1, 0]>]> {
-  let arguments = (ins View, View, View);
-  let extraClassDeclaration = libraryCallName;
+def DotOp : LinalgLibrary_Op<"dot", [NInputs<2>, NOutputs<1>]> {
+  let arguments = (ins AnyStridedMemRefOfRank<1>,
+                       AnyStridedMemRefOfRank<1>,
+                       AnyStridedMemRefOfRank<0>);
+  let extraClassDeclaration = libraryCallName # [{
+    ArrayAttr indexing_maps();
+
+    ArrayAttr iterator_types() {
+      MLIRContext *ctx = getContext();
+      return ArrayAttr::get(
+        StringAttr::get(getReductionIteratorTypeName(), ctx), ctx);
+    }
+  }];
 }
 
-def MatvecOp : LinalgLibrary_Op<"matvec",
-                                  [NInputsAndOutputs<2, 1>,
-                                   NLoopTypes<1, 1, 0>,
-                                   ViewRanks<[2, 1, 1]>]> {
-  let arguments = (ins View, View, View);
-  let extraClassDeclaration = libraryCallName;
+def MatvecOp : LinalgLibrary_Op<"matvec", [NInputs<2>, NOutputs<1>]> {
+  let arguments = (ins AnyStridedMemRefOfRank<2>,
+                       AnyStridedMemRefOfRank<1>,
+                       AnyStridedMemRefOfRank<1>);
+  let extraClassDeclaration = libraryCallName # [{
+    ArrayAttr indexing_maps();
+
+    ArrayAttr iterator_types() {
+      MLIRContext *ctx = getContext();
+      Attribute iters[2]{
+        StringAttr::get(getParallelIteratorTypeName(), ctx),
+        StringAttr::get(getReductionIteratorTypeName(), ctx)};
+      return ArrayAttr::get(iters, ctx);
+    }
+  }];
 }
 
-def MatmulOp : LinalgLibrary_Op<"matmul",
-                                  [NInputsAndOutputs<2, 1>,
-                                   NLoopTypes<2, 1, 0>,
-                                   ViewRanks<[2, 2, 2]>]> {
-  let arguments = (ins View, View, View);
-  let extraClassDeclaration = libraryCallName;
+def MatmulOp : LinalgLibrary_Op<"matmul", [NInputs<2>, NOutputs<1>]> {
+  let arguments = (ins AnyStridedMemRefOfRank<2>,
+                       AnyStridedMemRefOfRank<2>,
+                       AnyStridedMemRefOfRank<2>);
+  let extraClassDeclaration = libraryCallName # [{
+    ArrayAttr indexing_maps();
+
+    ArrayAttr iterator_types() {
+      MLIRContext *ctx = getContext();
+      Attribute iters[3]{
+        StringAttr::get(getParallelIteratorTypeName(), ctx),
+        StringAttr::get(getParallelIteratorTypeName(), ctx),
+        StringAttr::get(getReductionIteratorTypeName(), ctx)};
+      return ArrayAttr::get(iters, ctx);
+    }
+  }];
 }
 
-def ConvOp : LinalgLibrary_Op<"conv", [NInputsAndOutputs<2, 1>]> {
+def ConvOp : LinalgLibrary_Op<"conv", [NInputs<2>, NOutputs<1>]> {
   let description = [{
     Generic n-D convolution as described in the TF documentation:
     https://www.tensorflow.org/versions/r2.0/api_docs/python/tf/nn/convolution
@@ -320,10 +329,12 @@ def ConvOp : LinalgLibrary_Op<"conv", [NInputsAndOutputs<2, 1>]> {
                        q]
     ```
   }];
+
   // TODO(ntv) padding.
   // Following the TF source of truth above, strides and dilations are integer
   // attributes of the same rank as the number of window dimensions.
-  let arguments = (ins View:$filter, View:$input, View:$output,
+  let arguments = (ins AnyStridedMemRef:$filter, AnyStridedMemRef:$input,
+                   AnyStridedMemRef:$output,
                    OptionalAttr<I64ArrayAttr>:$strides,
                    OptionalAttr<I64ArrayAttr>:$dilations);
   let extraClassDeclaration = libraryCallName # [{
@@ -333,21 +344,27 @@ def ConvOp : LinalgLibrary_Op<"conv", [NInputsAndOutputs<2, 1>]> {
     unsigned getNumInputFeatureDimensions() { return 1; }
     unsigned getNumOutputFeatureDimensions() { return 1; }
 
-    // Outer parallel loops are always the number of output dimensions; i.e.
-    // [ b, xs, q] in the TF notation above.
-    unsigned getNumParallelLoops() { return getOutputViewType(0).getRank(); }
+    ArrayAttr indexing_maps();
 
-    // Window loops are a special kind of reduction that is neither tiled or
-    // parallelized across; i.e. [zs] in the TF notation above whose number
-    // match `xs` (i.e. 1 window loop per "image" dimension).
-    unsigned getNumWindowLoops() {
-      return getNumParallelLoops() - getNumBatchDimensions() -
-             getNumInputFeatureDimensions(); }
-
-    // Reduction loops are exactly the non-parallel, non-window loops (i.e. `q`)
-    // We distinguish between reduction loops and convolution window loops for
-    // now. That distinction may disappear in the future.
-    unsigned getNumReductionLoops() { return getNumInputFeatureDimensions(); }
+    ArrayAttr iterator_types() {
+      // Outer parallel loops are always the number of output dimensions; i.e.
+      // [ b, xs, q] in the TF notation above.
+      unsigned nPar = getOutputViewType(0).getRank();
+      unsigned nRed = getNumInputFeatureDimensions();
+      // Window loops are a special kind of reduction that is never tiled or
+      // parallelized across; i.e. [zs] in the TF notation above whose number
+      // match `xs` (i.e. 1 window loop per "image" dimension).
+      // This may evolve in the future.
+      unsigned nWin =
+        nPar - getNumBatchDimensions() - getNumInputFeatureDimensions();
+      MLIRContext *ctx = getContext();
+      SmallVector<Attribute, 8> iters(
+        nPar, StringAttr::get(getParallelIteratorTypeName(), ctx));
+      iters.reserve(nPar + nRed + nWin);
+      iters.append(nRed, StringAttr::get(getReductionIteratorTypeName(), ctx));
+      iters.append(nWin, StringAttr::get(getWindowIteratorTypeName(), ctx));
+      return ArrayAttr::get(iters, ctx);
+    }
 
     int64_t getStride(unsigned i) {
       assert(i < getNumWindowLoops());
@@ -366,142 +383,26 @@ def ConvOp : LinalgLibrary_Op<"conv", [NInputsAndOutputs<2, 1>]> {
   let verifier = [{ return ::verify(*this); }];
 }
 
-def GenericOp : LinalgLibraryBase_Op<"generic", []> {
-  let description = [{
-    Generic Linalg op form where the key properties of the computation are
-    specified as attributes. In pretty form, a linalg.generic op is written as:
-
-      ```
-        linalg.generic #trait_attribute %A, %B, %C {other-attributes} :
-          !linalg.view<?x?xf32>, !linalg.view<?x?xf32>, !linalg.view<?x?xf32>
-      ```
-
-    Where #trait_attributes is an alias of a dictionary attribute containing:
-      - doc [optional]: a documentation string
-      - fun: a SymbolRefAttr that must resolve to an existing function symbol.
-        To support inplace updates in a generic fashion, the signature of the
-        function must be:
-        ```
-          fun([input views element types], [output views element types])
-            -> ([output views element types])
-        ```
-      - indexing_maps: a list of AffineMapAttr, one AffineMapAttr per each input
-        and output view. Such AffineMapAttr specifies the mapping between the
-        loops and the indexing within each view.
-      - library_call [optional]: a StringAttr containing the name of an
-        external library function that the linalg.generic operation maps to.
-        The external library is assumed to be dynamically linked and no strong
-        compile-time guarantees are provided. In the absence of such a library
-        call, linalg.generic will always lower to loops.
-      - n_loops: a triple of I64Attr representing the number of enclosing
-        [parallel, reduction, window] loops respectively.
-      - n_views: a pair of I64Attr representing the number of input (readonly)
-        and output (readwrite) views.
-
-    Example:
-    Defining a #matmul_trait attribute in MLIR can be done as follows:
-      ```
-        func @fma(%a: f32, %b: f32, %c: f32) -> f32 {
-          %d = mulf %a, %b: f32
-          %e = addf %c, %d: f32
-          return %e: f32
-        }
-        #matmul_accesses = [
-          (m, n, k) -> (m, k),
-          (m, n, k) -> (k, n),
-          (m, n, k) -> (m, n)
-        ]
-        #matmul_trait = {
-          doc = "C(m, n) += A(m, k) * B(k, n)",
-          fun = @fma,
-          indexing_maps = #matmul_accesses,
-          library_call = "linalg_matmul",
-          n_views = [2, 1],
-          n_loop_types = [2, 1, 0]
-        }
-      ```
-
-    And can be reused in multiple places as:
-      ```
-        linalg.generic #matmul_trait %A, %B, %C [other-attributes] :
-          !linalg.view<?x?xf32>, !linalg.view<?x?xf32>, !linalg.view<?x?xf32>
-      ```
-
-    This may lower to either:
-      ```
-        call @linalg_matmul(%A, %B, %C) :
-          (!linalg.view<?x?xf32>, !linalg.view<?x?xf32>, !linalg.view<?x?xf32>)
-          -> ()
-      ```
-
-    or IR resembling:
-    ```
-    loop.for %m = %c0 to %M step %c1 {
-      loop.for %n = %c0 to %N step %c1 {
-        loop.for %k = %c0 to %K step %c1 {
-          %a = linalg.load %A[%m, %k] : !linalg.view<?x?xf32>
-          %b = linalg.load %B[%k, %n] : !linalg.view<?x?xf32>
-          %c = linalg.load %C[%m, %n] : !linalg.view<?x?xf32>
-          %d = call @mac(%a, %b, %c) : (f32, f32, f32) -> (f32)
-          linalg.store %d, %C[%m, %n] : !linalg.view<?x?x?xf32>
-        }
-      }
-    }
-    ```
-  }];
-  let arguments = (ins Variadic<View>:$views,
+class GenericOpBase<string mnemonic> : LinalgLibraryBase_Op<mnemonic, []> {
+  let arguments = (ins Variadic<AnyStridedMemRef>:$views,
+                   I64Attr:$args_in,
+                   I64Attr:$args_out,
                    AffineMapArrayAttr:$indexing_maps,
-                   I64ArrayAttr:$n_loop_types,
-                   I64ArrayAttr:$n_views,
+                   ArrayAttr:$iterator_types,
                    OptionalAttr<StrAttr>:$doc,
-                   OptionalAttr<SymbolRefAttr>:$fun,
+                   OptionalAttr<FlatSymbolRefAttr>:$fun,
                    OptionalAttr<StrAttr>:$library_call);
   let regions = (region AnyRegion:$region);
   let extraClassDeclaration = [{
     SmallVector<StringRef, 8> linalgTraitAttrNames() {
       return SmallVector<StringRef, 8>{
-        "doc", "fun", "indexing_maps", "library_call", "n_loop_types", "n_views"
+        getArgsInAttrName(), getArgsOutAttrName(), getDocAttrName(),
+        getFunAttrName(), getIndexingMapsAttrName(), getLibraryCallAttrName(),
+        getIteratorTypesAttrName()
       };
     }
-    unsigned getNumInputs() {
-      if (!getAttr("n_views") || n_views().getValue().size() != 2)
-        return 0;
-      auto val = n_views().getValue()[0].cast<IntegerAttr>().getValue();
-      assert(val.getSExtValue() >= 0);
-      return val.getZExtValue();
-    }
-    unsigned getNumOutputs() {
-      if (!getAttr("n_views") || n_views().getValue().size() != 2)
-        return 0;
-      auto val = n_views().getValue()[1].cast<IntegerAttr>().getValue();
-      assert(val.getSExtValue() >= 0);
-      return val.getZExtValue();
-    }
-    unsigned getNumParallelLoops() {
-      if (!getAttr("n_loop_types") || n_loop_types().getValue().size() != 3)
-        return 0;
-      auto val = n_loop_types().getValue()[0].cast<IntegerAttr>().getValue();
-      assert(val.getSExtValue() >= 0);
-      return val.getZExtValue();
-    }
-    unsigned getNumReductionLoops() {
-      if (!getAttr("n_loop_types") || n_loop_types().getValue().size() != 3)
-        return 0;
-      auto val = n_loop_types().getValue()[1].cast<IntegerAttr>().getValue();
-      assert(val.getSExtValue() >= 0);
-      return val.getZExtValue();
-    }
-    unsigned getNumWindowLoops() {
-      if (!getAttr("n_loop_types") || n_loop_types().getValue().size() != 3)
-        return 0;
-      auto val = n_loop_types().getValue()[2].cast<IntegerAttr>().getValue();
-      assert(val.getSExtValue() >= 0);
-      return val.getZExtValue();
-    }
-    unsigned getNumLoops() {
-      return getNumParallelLoops() + getNumReductionLoops() +
-        getNumWindowLoops();
-    }
+    unsigned getNumInputs() { return args_in().getSExtValue(); }
+    unsigned getNumOutputs() { return args_out().getSExtValue(); }
     FuncOp getFunction() {
       auto moduleOp = getParentOfType<ModuleOp>();
       return fun().hasValue() ?
@@ -525,7 +426,200 @@ def GenericOp : LinalgLibraryBase_Op<"generic", []> {
     }
   }];
   let printer = [{ return ::print(p, *this); }];
-  let verifier = [{ return ::verify(*this); }];
-  let parser = [{ return ::parse$cppClass(parser, result); }];
+  let parser = [{ return ::parseGenericOp(parser, result); }];
 }
+
+def GenericOp : GenericOpBase<"generic"> {
+  let description = [{
+    Generic Linalg op form where the key properties of the computation are
+    specified as attributes. In pretty form, a linalg.generic op is written as:
+
+      ```mlir
+        linalg.generic #trait_attribute %A, %B, %C {other-attributes} :
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>
+      ```
+
+    Where #trait_attributes is an alias of a dictionary attribute containing:
+      - args_in: an I64Attr representing the number of input (readonly) views
+      - args_out: an I64Attr representing the number of output (readwrite) views
+      - doc [optional]: a documentation string
+      - fun: a FlatSymbolRefAttr that must resolve to an existing function
+        symbol. To support inplace updates in a generic fashion, the signature
+        of the function must be:
+        ```
+          fun([input views element types], [output views element types])
+            -> ([output views element types])
+        ```
+      - indexing_maps: a list of AffineMapAttr, one AffineMapAttr per each input
+        and output view. Such AffineMapAttr specifies the mapping between the
+        loops and the indexing within each view.
+      - library_call [optional]: a StringAttr containing the name of an
+        external library function that the linalg.generic operation maps to.
+        The external library is assumed to be dynamically linked and no strong
+        compile-time guarantees are provided. In the absence of such a library
+        call, linalg.generic will always lower to loops.
+      - iterator_types: an ArrayAttr specifying the type of the enclosing loops.
+        Each element of the list represents and iterator of one of the following
+        types:
+          parallel, reduction, window
+
+    Example:
+    Defining a #matmul_trait attribute in MLIR can be done as follows:
+      ```mlir
+        func @fma(%a: f32, %b: f32, %c: f32) -> f32 {
+          %d = mulf %a, %b: f32
+          %e = addf %c, %d: f32
+          return %e: f32
+        }
+        #matmul_accesses = [
+          (m, n, k) -> (m, k),
+          (m, n, k) -> (k, n),
+          (m, n, k) -> (m, n)
+        ]
+        #matmul_trait = {
+          doc = "C(m, n) += A(m, k) * B(k, n)",
+          fun = @fma,
+          indexing_maps = #matmul_accesses,
+          library_call = "linalg_matmul",
+          n_views = [2, 1],
+          iterator_types = ["parallel", "parallel", "reduction"]
+        }
+      ```
+
+    And can be reused in multiple places as:
+      ```mlir
+        linalg.generic #matmul_trait %A, %B, %C [other-attributes] :
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>
+      ```
+
+    This may lower to either:
+      ```mlir
+        call @linalg_matmul(%A, %B, %C) :
+          (memref<?x?xf32, stride_specification>,
+           memref<?x?xf32, stride_specification>,
+           memref<?x?xf32, stride_specification>)
+          -> ()
+      ```
+
+    or IR resembling:
+    ```mlir
+    loop.for %m = %c0 to %M step %c1 {
+      loop.for %n = %c0 to %N step %c1 {
+        loop.for %k = %c0 to %K step %c1 {
+          %a = linalg.load %A[%m, %k] : memref<?x?xf32, stride_specification>
+          %b = linalg.load %B[%k, %n] : memref<?x?xf32, stride_specification>
+          %c = linalg.load %C[%m, %n] : memref<?x?xf32, stride_specification>
+          %d = call @func_of_elements(%a, %b, %c)
+                 : (f32, f32, f32) -> (f32)
+          linalg.store %d, %C[%m, %n] : memref<?x?x?xf32, stride_specification>
+        }
+      }
+    }
+    ```
+  }];
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def IndexedGenericOp : GenericOpBase<"indexed_generic"> {
+  let description = [{
+    Indexed Generic Linalg op form where the key properties of the computation
+    are specified as attributes. In pretty form, a linalg.indexed_generic op is
+    written as:
+
+      ```mlir
+        linalg.indexed_generic #trait_attribute %A, %B, %C {other-attributes} :
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>
+      ```
+
+    Where #trait_attributes is an alias of a dictionary attribute containing:
+      - args_in: an I64Attr representing the number of input (readonly) views
+      - args_out: an I64Attr representing the number of output (readwrite) views
+      - doc [optional]: a documentation string
+      - fun: a FlatSymbolRefAttr that must resolve to an existing function
+        symbol. To support inplace updates in a generic fashion, the signature
+        of the function must be:
+        ```
+          fun([index types of induction variables], [input views element types],
+              [output views element types]) -> ([output views element types])
+        ```
+      - indexing_maps: a list of AffineMapAttr, one AffineMapAttr per each input
+        and output view. Such AffineMapAttr specifies the mapping between the
+        loops and the indexing within each view.
+      - library_call [optional]: a StringAttr containing the name of an
+        external library function that the linalg.indexed_generic operation
+        maps to.  The external library is assumed to be dynamically linked and
+        no strong compile-time guarantees are provided. In the absence of such
+        a library call, linalg.indexed_generic will always lower to loops.
+      - iterator_types: an ArrayAttr they type of the enclosing loops; Each
+        element of the list represents and iterator of one of the following
+        types:
+          parallel, reduction, window
+
+    Example:
+    Defining a #matmul_trait attribute in MLIR can be done as follows:
+      ```mlir
+        func @fma(%i: index, %j: index, %k: index, %a: f32, %b: f32, %c: f32)
+          -> f32
+        {
+          %d = mulf %a, %b: f32
+          %e = addf %c, %d: f32
+          return %e: f32
+        }
+        #matmul_accesses = [
+          (m, n, k) -> (m, k),
+          (m, n, k) -> (k, n),
+          (m, n, k) -> (m, n)
+        ]
+        #matmul_trait = {
+          doc = "C(m, n) += A(m, k) * B(k, n)",
+          fun = @fma,
+          indexing_maps = #matmul_accesses,
+          library_call = "linalg_matmul",
+          n_views = [2, 1],
+          iterator_types = ["parallel", "parallel", "reduction"]
+        }
+      ```
+
+    And can be reused in multiple places as:
+      ```mlir
+        linalg.indexed_generic #matmul_trait %A, %B, %C [other-attributes] :
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>,
+          memref<?x?xf32, stride_specification>
+      ```
+
+    This may lower to either:
+      ```mlir
+        call @linalg_matmul(%A, %B, %C) :
+          (memref<?x?xf32, stride_specification>,
+           memref<?x?xf32, stride_specification>,
+           memref<?x?xf32, stride_specification>)
+          -> ()
+      ```
+
+    or IR resembling:
+    ```mlir
+    loop.for %m = %c0 to %M step %c1 {
+      loop.for %n = %c0 to %N step %c1 {
+        loop.for %k = %c0 to %K step %c1 {
+          %a = linalg.load %A[%m, %k] : memref<?x?xf32, stride_specification>
+          %b = linalg.load %B[%k, %n] : memref<?x?xf32, stride_specification>
+          %c = linalg.load %C[%m, %n] : memref<?x?xf32, stride_specification>
+          %d = call @func_of_elements_and_indices(%m, %n, %k, %a, %b, %c)
+                 : (index, index, index, f32, f32, f32) -> (f32)
+          linalg.store %d, %C[%m, %n] : memref<?x?x?xf32, stride_specification>
+        }
+      }
+    }
+    ```
+  }];
+  let verifier = [{ return ::verify(*this); }];
+}
+
 #endif // LINALG_LIBRARY_OPS

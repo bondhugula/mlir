@@ -125,38 +125,38 @@ func @access_chain_invalid_accessing_type(%index0 : i32) -> () {
 //===----------------------------------------------------------------------===//
 
 func @cast1(%arg0 : f32) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from f32 to i32
-  %0 = spv.Bitcast %arg0 from f32 to i32
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : f32 to i32
+  %0 = spv.Bitcast %arg0 : f32 to i32
   return
 }
 
 func @cast2(%arg0 : vector<2xf32>) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from vector<2xf32> to vector<2xi32>
-  %0 = spv.Bitcast %arg0 from vector<2xf32> to vector<2xi32>
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : vector<2xf32> to vector<2xi32>
+  %0 = spv.Bitcast %arg0 : vector<2xf32> to vector<2xi32>
   return
 }
 
 func @cast3(%arg0 : vector<2xf32>) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from vector<2xf32> to i64
-  %0 = spv.Bitcast %arg0 from vector<2xf32> to i64
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : vector<2xf32> to i64
+  %0 = spv.Bitcast %arg0 : vector<2xf32> to i64
   return
 }
 
 func @cast4(%arg0 : !spv.ptr<f32, Function>) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from !spv.ptr<f32, Function> to !spv.ptr<i32, Function>
-  %0 = spv.Bitcast %arg0 from !spv.ptr<f32, Function> to !spv.ptr<i32, Function>
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : !spv.ptr<f32, Function> to !spv.ptr<i32, Function>
+  %0 = spv.Bitcast %arg0 : !spv.ptr<f32, Function> to !spv.ptr<i32, Function>
   return
 }
 
 func @cast5(%arg0 : !spv.ptr<f32, Function>) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from !spv.ptr<f32, Function> to !spv.ptr<vector<2xi32>, Function>
-  %0 = spv.Bitcast %arg0 from !spv.ptr<f32, Function> to !spv.ptr<vector<2xi32>, Function>
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : !spv.ptr<f32, Function> to !spv.ptr<vector<2xi32>, Function>
+  %0 = spv.Bitcast %arg0 : !spv.ptr<f32, Function> to !spv.ptr<vector<2xi32>, Function>
   return
 }
 
 func @cast6(%arg0 : vector<4xf32>) {
-  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} from vector<4xf32> to vector<2xi64>
-  %0 = spv.Bitcast %arg0 from vector<4xf32> to vector<2xi64>
+  // CHECK: {{%.*}} = spv.Bitcast {{%.*}} : vector<4xf32> to vector<2xi64>
+  %0 = spv.Bitcast %arg0 : vector<4xf32> to vector<2xi64>
   return
 }
 
@@ -164,7 +164,7 @@ func @cast6(%arg0 : vector<4xf32>) {
 
 func @cast1(%arg0 : f32) {
   // expected-error @+1 {{result type must be different from operand type}}
-  %0 = spv.Bitcast %arg0 from f32 to f32
+  %0 = spv.Bitcast %arg0 : f32 to f32
   return
 }
 
@@ -172,7 +172,7 @@ func @cast1(%arg0 : f32) {
 
 func @cast1(%arg0 : f32) {
   // expected-error @+1 {{mismatch in result type bitwidth 64 and operand type bitwidth 32}}
-  %0 = spv.Bitcast %arg0 from f32 to i64
+  %0 = spv.Bitcast %arg0 : f32 to i64
   return
 }
 
@@ -180,7 +180,7 @@ func @cast1(%arg0 : f32) {
 
 func @cast1(%arg0 : vector<2xf32>) {
   // expected-error @+1 {{mismatch in result type bitwidth 96 and operand type bitwidth 64}}
-  %0 = spv.Bitcast %arg0 from vector<2xf32> to vector<3xf32>
+  %0 = spv.Bitcast %arg0 : vector<2xf32> to vector<3xf32>
   return
 }
 
@@ -188,7 +188,7 @@ func @cast1(%arg0 : vector<2xf32>) {
 
 func @cast3(%arg0 : !spv.ptr<f32, Function>) {
   // expected-error @+1 {{unhandled bit cast conversion from pointer type to non-pointer type}}
-  %0 = spv.Bitcast %arg0 from !spv.ptr<f32, Function> to i64
+  %0 = spv.Bitcast %arg0 : !spv.ptr<f32, Function> to i64
   return
 }
 
@@ -196,152 +196,82 @@ func @cast3(%arg0 : !spv.ptr<f32, Function>) {
 
 func @cast3(%arg0 : i64) {
   // expected-error @+1 {{unhandled bit cast conversion from non-pointer type to pointer type}}
-  %0 = spv.Bitcast %arg0 from i64 to !spv.ptr<f32, Function>
+  %0 = spv.Bitcast %arg0 : i64 to !spv.ptr<f32, Function>
   return
 }
 
 // -----
 
 //===----------------------------------------------------------------------===//
-// spv.CompositeExtractOp
+// spv.BitCount
 //===----------------------------------------------------------------------===//
 
-func @composite_extract_f32_from_1D_array(%arg0: !spv.array<4xf32>) -> f32 {
-  // CHECK: %0 = spv.CompositeExtract %arg0[1 : i32] : !spv.array<4 x f32>
-  %0 = spv.CompositeExtract %arg0[1 : i32] : !spv.array<4xf32>
-  return %0: f32
+func @bitcount(%arg: i32) -> i32 {
+  // CHECK: spv.BitCount {{%.*}} : i32
+  %0 = spv.BitCount %arg : i32
+  spv.ReturnValue %0 : i32
 }
 
 // -----
 
-func @composite_extract_f32_from_2D_array(%arg0: !spv.array<4x!spv.array<4xf32>>) -> f32 {
-  // CHECK: %0 = spv.CompositeExtract %arg0[1 : i32, 2 : i32] : !spv.array<4 x !spv.array<4 x f32>>
-  %0 = spv.CompositeExtract %arg0[1 : i32, 2 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return %0: f32
+//===----------------------------------------------------------------------===//
+// spv.BitFieldInsert
+//===----------------------------------------------------------------------===//
+
+func @bit_field_insert_vec(%base: vector<3xi32>, %insert: vector<3xi32>, %offset: i32, %count: i16) -> vector<3xi32> {
+  // CHECK: {{%.*}} = spv.BitFieldInsert {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}} : vector<3xi32>, i32, i16
+  %0 = spv.BitFieldInsert %base, %insert, %offset, %count : vector<3xi32>, i32, i16
+  spv.ReturnValue %0 : vector<3xi32>
 }
 
 // -----
 
-func @composite_extract_1D_array_from_2D_array(%arg0: !spv.array<4x!spv.array<4xf32>>) -> !spv.array<4xf32> {
-  // CHECK: %0 = spv.CompositeExtract %arg0[1 : i32] : !spv.array<4 x !spv.array<4 x f32>>
-  %0 = spv.CompositeExtract %arg0[1 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return %0 : !spv.array<4xf32>
+func @bit_field_insert_invalid_insert_type(%base: vector<3xi32>, %insert: vector<2xi32>, %offset: i32, %count: i16) -> vector<3xi32> {
+  // expected-error @+1 {{expected the same type for the base operand, insert operand, and result, but provided 'vector<3xi32>', 'vector<2xi32>' and 'vector<3xi32>'}}
+  %0 = "spv.BitFieldInsert" (%base, %insert, %offset, %count) : (vector<3xi32>, vector<2xi32>, i32, i16) -> vector<3xi32>
+  spv.ReturnValue %0 : vector<3xi32>
 }
 
 // -----
 
-func @composite_extract_struct(%arg0 : !spv.struct<f32, !spv.array<4xf32>>) -> f32 {
-  // CHECK: %0 = spv.CompositeExtract %arg0[1 : i32, 2 : i32] : !spv.struct<f32, !spv.array<4 x f32>>
-  %0 = spv.CompositeExtract %arg0[1 : i32, 2 : i32] : !spv.struct<f32, !spv.array<4xf32>>
-  return %0 : f32
+//===----------------------------------------------------------------------===//
+// spv.BitFieldSExtract
+//===----------------------------------------------------------------------===//
+
+func @bit_field_s_extract_vec(%base: vector<3xi32>, %offset: i8, %count: i8) -> vector<3xi32> {
+  // CHECK: {{%.*}} = spv.BitFieldSExtract {{%.*}}, {{%.*}}, {{%.*}} : vector<3xi32>, i8, i8
+  %0 = spv.BitFieldSExtract %base, %offset, %count : vector<3xi32>, i8, i8
+  spv.ReturnValue %0 : vector<3xi32>
+}
+
+//===----------------------------------------------------------------------===//
+// spv.BitFieldUExtract
+//===----------------------------------------------------------------------===//
+
+func @bit_field_u_extract_vec(%base: vector<3xi32>, %offset: i8, %count: i8) -> vector<3xi32> {
+  // CHECK: {{%.*}} = spv.BitFieldUExtract {{%.*}}, {{%.*}}, {{%.*}} : vector<3xi32>, i8, i8
+  %0 = spv.BitFieldUExtract %base, %offset, %count : vector<3xi32>, i8, i8
+  spv.ReturnValue %0 : vector<3xi32>
 }
 
 // -----
 
-func @composite_extract_vector(%arg0 : vector<4xf32>) -> f32 {
-  // CHECK: %0 = spv.CompositeExtract %arg0[1 : i32] : vector<4xf32>
-  %0 = spv.CompositeExtract %arg0[1 : i32] : vector<4xf32>
-  return %0 : f32
+func @bit_field_u_extract_invalid_result_type(%base: vector<3xi32>, %offset: i32, %count: i16) -> vector<4xi32> {
+  // expected-error @+1 {{expected the same type for the first operand and result, but provided 'vector<3xi32>' and 'vector<4xi32>'}}
+  %0 = "spv.BitFieldUExtract" (%base, %offset, %count) : (vector<3xi32>, i32, i16) -> vector<4xi32>
+  spv.ReturnValue %0 : vector<4xi32>
 }
 
 // -----
 
-func @composite_extract_no_ssa_operand() -> () {
-  // expected-error @+1 {{expected SSA operand}}
-  %0 = spv.CompositeExtract [4 : i32, 1 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
+//===----------------------------------------------------------------------===//
+// spv.BitReverse
+//===----------------------------------------------------------------------===//
 
-// -----
-
-func @composite_extract_invalid_index_type_1() -> () {
-  %0 = spv.constant 10 : i32
-  %1 = spv.Variable : !spv.ptr<!spv.array<4x!spv.array<4xf32>>, Function>
-  %2 = spv.Load "Function" %1 ["Volatile"] : !spv.array<4x!spv.array<4xf32>>
-  // expected-error @+1 {{expected non-function type}}
-  %3 = spv.CompositeExtract %2[%0] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_invalid_index_type_2(%arg0 : !spv.array<4x!spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{op attribute 'indices' failed to satisfy constraint: 32-bit integer array attribute}}
-  %0 = spv.CompositeExtract %arg0[1] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_invalid_index_identifier(%arg0 : !spv.array<4x!spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{expected bare identifier}}
-  %0 = spv.CompositeExtract %arg0(1 : i32) : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_2D_array_out_of_bounds_access_1(%arg0: !spv.array<4x!spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{index 4 out of bounds for '!spv.array<4 x !spv.array<4 x f32>>'}}
-  %0 = spv.CompositeExtract %arg0[4 : i32, 1 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_2D_array_out_of_bounds_access_2(%arg0: !spv.array<4x!spv.array<4xf32>>
-) -> () {
-  // expected-error @+1 {{index 4 out of bounds for '!spv.array<4 x f32>'}}
-  %0 = spv.CompositeExtract %arg0[1 : i32, 4 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_struct_element_out_of_bounds_access(%arg0 : !spv.struct<f32, !spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{index 2 out of bounds for '!spv.struct<f32, !spv.array<4 x f32>>'}}
-  %0 = spv.CompositeExtract %arg0[2 : i32, 0 : i32] : !spv.struct<f32, !spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_vector_out_of_bounds_access(%arg0: vector<4xf32>) -> () {
-  // expected-error @+1 {{index 4 out of bounds for 'vector<4xf32>'}}
-  %0 = spv.CompositeExtract %arg0[4 : i32] : vector<4xf32>
-  return
-}
-
-// -----
-
-func @composite_extract_invalid_types_1(%arg0: !spv.array<4x!spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{cannot extract from non-composite type 'f32' with index 3}}
-  %0 = spv.CompositeExtract %arg0[1 : i32, 2 : i32, 3 : i32] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_invalid_types_2(%arg0: f32) -> () {
-  // expected-error @+1 {{cannot extract from non-composite type 'f32' with index 1}}
-  %0 = spv.CompositeExtract %arg0[1 : i32] : f32
-  return
-}
-
-// -----
-
-func @composite_extract_invalid_extracted_type(%arg0: !spv.array<4x!spv.array<4xf32>>) -> () {
-  // expected-error @+1 {{expected at least one index for spv.CompositeExtract}}
-  %0 = spv.CompositeExtract %arg0[] : !spv.array<4x!spv.array<4xf32>>
-  return
-}
-
-// -----
-
-func @composite_extract_result_type_mismatch(%arg0: !spv.array<4xf32>) -> i32 {
-  // expected-error @+1 {{invalid result type: expected 'f32' but provided 'i32'}}
-  %0 = "spv.CompositeExtract"(%arg0) {indices = [2: i32]} : (!spv.array<4xf32>) -> (i32)
-  return %0: i32
+func @bitreverse(%arg: i32) -> i32 {
+  // CHECK: spv.BitReverse {{%.*}} : i32
+  %0 = spv.BitReverse %arg : i32
+  spv.ReturnValue %0 : i32
 }
 
 // -----
@@ -362,6 +292,122 @@ func @control_barrier_1() -> () {
   // expected-error @+1 {{invalid scope attribute specification: "Something"}}
   spv.ControlBarrier "Something", "Device", "Acquire|UniformMemory"
   return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ConvertFToS
+//===----------------------------------------------------------------------===//
+
+func @convert_f_to_s_scalar(%arg0 : f32) -> i32 {
+  // CHECK: {{%.*}} = spv.ConvertFToS {{%.*}} : f32 to i32
+  %0 = spv.ConvertFToS %arg0 : f32 to i32
+  spv.ReturnValue %0 : i32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ConvertFToU
+//===----------------------------------------------------------------------===//
+
+func @convert_f_to_u_scalar(%arg0 : f32) -> i32 {
+  // CHECK: {{%.*}} = spv.ConvertFToU {{%.*}} : f32 to i32
+  %0 = spv.ConvertFToU %arg0 : f32 to i32
+  spv.ReturnValue %0 : i32
+}
+
+// -----
+
+func @convert_f_to_u_vector(%arg0 : vector<3xf32>) -> vector<3xi32> {
+  // CHECK: {{%.*}} = spv.ConvertFToU {{%.*}} : vector<3xf32> to vector<3xi32>
+  %0 = spv.ConvertFToU %arg0 : vector<3xf32> to vector<3xi32>
+  spv.ReturnValue %0 : vector<3xi32>
+}
+
+// -----
+
+func @convert_f_to_u_scalar_invalid(%arg0 : f16) -> i32 {
+  // expected-error @+1 {{expected the same bit widths for operand type and result type, but provided 'f16' and 'i32'}}
+  %0 = spv.ConvertFToU %arg0 : f16 to i32
+  spv.ReturnValue %0 : i32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ConvertSToF
+//===----------------------------------------------------------------------===//
+
+func @convert_s_to_f_scalar(%arg0 : i32) -> f32 {
+  // CHECK: {{%.*}} = spv.ConvertSToF {{%.*}} : i32 to f32
+  %0 = spv.ConvertSToF %arg0 : i32 to f32
+  spv.ReturnValue %0 : f32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ConvertUToF
+//===----------------------------------------------------------------------===//
+
+func @convert_u_to_f_scalar(%arg0 : i32) -> f32 {
+  // CHECK: {{%.*}} = spv.ConvertUToF {{%.*}} : i32 to f32
+  %0 = spv.ConvertUToF %arg0 : i32 to f32
+  spv.ReturnValue %0 : f32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.FConvert
+//===----------------------------------------------------------------------===//
+
+func @f_convert_scalar(%arg0 : f32) -> f64 {
+  // CHECK: {{%.*}} = spv.FConvert {{%.*}} : f32 to f64
+  %0 = spv.FConvert %arg0 : f32 to f64
+  spv.ReturnValue %0 : f64
+}
+
+// -----
+
+func @f_convert_vector(%arg0 : vector<3xf32>) -> vector<3xf64> {
+  // CHECK: {{%.*}} = spv.FConvert {{%.*}} : vector<3xf32> to vector<3xf64>
+  %0 = spv.FConvert %arg0 : vector<3xf32> to vector<3xf64>
+  spv.ReturnValue %0 : vector<3xf64>
+}
+
+// -----
+
+func @f_convert_vector(%arg0 : f32) -> f32 {
+  // expected-error @+1 {{expected the different bit widths for operand type and result type, but provided 'f32' and 'f32'}}
+  %0 = spv.FConvert %arg0 : f32 to f32
+  spv.ReturnValue %0 : f32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.SConvert
+//===----------------------------------------------------------------------===//
+
+func @s_convert_scalar(%arg0 : i32) -> i64 {
+  // CHECK: {{%.*}} = spv.SConvert {{%.*}} : i32 to i64
+  %0 = spv.SConvert %arg0 : i32 to i64
+  spv.ReturnValue %0 : i64
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.UConvert
+//===----------------------------------------------------------------------===//
+
+func @u_convert_scalar(%arg0 : i32) -> i64 {
+  // CHECK: {{%.*}} = spv.UConvert {{%.*}} : i32 to i64
+  %0 = spv.UConvert %arg0 : i32 to i64
+  spv.ReturnValue %0 : i64
 }
 
 // -----
@@ -607,6 +653,113 @@ spv.module "Logical" "GLSL450" {
 // -----
 
 //===----------------------------------------------------------------------===//
+// spv.LogicalAnd
+//===----------------------------------------------------------------------===//
+
+func @logicalBinary(%arg0 : i1, %arg1 : i1, %arg2 : i1)
+{
+  // CHECK: [[TMP:%.*]] = spv.LogicalAnd {{%.*}}, {{%.*}} : i1
+  %0 = spv.LogicalAnd %arg0, %arg1 : i1
+  // CHECK: {{%.*}} = spv.LogicalAnd [[TMP]], {{%.*}} : i1
+  %1 = spv.LogicalAnd %0, %arg2 : i1
+  return
+}
+
+func @logicalBinary2(%arg0 : vector<4xi1>, %arg1 : vector<4xi1>)
+{
+  // CHECK: {{%.*}} = spv.LogicalAnd {{%.*}}, {{%.*}} : vector<4xi1>
+  %0 = spv.LogicalAnd %arg0, %arg1 : vector<4xi1>
+  return
+}
+
+// -----
+
+func @logicalBinary(%arg0 : i1, %arg1 : i1)
+{
+  // expected-error @+2 {{expected ':'}}
+  %0 = spv.LogicalAnd %arg0, %arg1
+  return
+}
+
+// -----
+
+func @logicalBinary(%arg0 : i1, %arg1 : i1)
+{
+  // expected-error @+2 {{expected non-function type}}
+  %0 = spv.LogicalAnd %arg0, %arg1 :
+  return
+}
+
+// -----
+
+func @logicalBinary(%arg0 : i1, %arg1 : i1)
+{
+  // expected-error @+1 {{custom op 'spv.LogicalAnd' expected 2 operands}}
+  %0 = spv.LogicalAnd %arg0 : i1
+  return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.LogicalNot
+//===----------------------------------------------------------------------===//
+
+func @logicalUnary(%arg0 : i1, %arg1 : i1)
+{
+  // CHECK: [[TMP:%.*]] = spv.LogicalNot {{%.*}} : i1
+  %0 = spv.LogicalNot %arg0 : i1
+  // CHECK: {{%.*}} = spv.LogicalNot [[TMP]] : i1
+  %1 = spv.LogicalNot %0 : i1
+  return
+}
+
+func @logicalUnary2(%arg0 : vector<4xi1>)
+{
+  // CHECK: {{%.*}} = spv.LogicalNot {{%.*}} : vector<4xi1>
+  %0 = spv.LogicalNot %arg0 : vector<4xi1>
+  return
+}
+
+// -----
+
+func @logicalUnary(%arg0 : i1)
+{
+  // expected-error @+2 {{expected ':'}}
+  %0 = spv.LogicalNot %arg0
+  return
+}
+
+// -----
+
+func @logicalUnary(%arg0 : i1)
+{
+  // expected-error @+2 {{expected non-function type}}
+  %0 = spv.LogicalNot %arg0 :
+  return
+}
+
+// -----
+
+func @logicalUnary(%arg0 : i1)
+{
+  // expected-error @+1 {{expected SSA operand}}
+  %0 = spv.LogicalNot : i1
+  return
+}
+
+// -----
+
+func @logicalUnary(%arg0 : i32)
+{
+  // expected-error @+1 {{'spv.LogicalNot' op operand #0 must be 1-bit integer or vector of 1-bit integer values of length 2/3/4, but got 'i32'}}
+  %0 = spv.LogicalNot %arg0 : i32
+  return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // spv.MemoryBarrier
 //===----------------------------------------------------------------------===//
 
@@ -630,6 +783,18 @@ func @memory_barrier_2() -> () {
  // expected-error @+1 {{expected at most one of these four memory constraints to be set: `Acquire`, `Release`,`AcquireRelease` or `SequentiallyConsistent`}}
   spv.MemoryBarrier "Device", "Acquire|Release"
   return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.Not
+//===----------------------------------------------------------------------===//
+
+func @not(%arg: i32) -> i32 {
+  // CHECK: spv.Not {{%.*}} : i32
+  %0 = spv.Not %arg : i32
+  spv.ReturnValue %0 : i32
 }
 
 // -----
@@ -734,6 +899,50 @@ func @select_op(%arg1: vector<4xi1>) -> () {
   // expected-error @+1 {{op result type and false value type must be the same}}
   %2 = "spv.Select"(%arg1, %1, %0) : (vector<4xi1>, vector<3xi32>, vector<3xf32>) -> vector<3xi32>
   return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ShiftLeftLogical
+//===----------------------------------------------------------------------===//
+
+func @shift_left_logical(%arg0: i32, %arg1 : i16) -> i32 {
+  // CHECK: {{%.*}} = spv.ShiftLeftLogical {{%.*}}, {{%.*}} : i32, i16
+  %0 = spv.ShiftLeftLogical %arg0, %arg1: i32, i16
+  spv.ReturnValue %0 : i32
+}
+
+// -----
+
+func @shift_left_logical_invalid_result_type(%arg0: i32, %arg1 : i16) -> i16 {
+  // expected-error @+1 {{expected the same type for the first operand and result, but provided 'i32' and 'i16'}}
+  %0 = "spv.ShiftLeftLogical" (%arg0, %arg1) : (i32, i16) -> (i16)
+  spv.ReturnValue %0 : i16
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ShiftRightArithmetic
+//===----------------------------------------------------------------------===//
+
+func @shift_right_arithmetic(%arg0: vector<4xi32>, %arg1 : vector<4xi8>) -> vector<4xi32> {
+  // CHECK: {{%.*}} = spv.ShiftRightArithmetic {{%.*}}, {{%.*}} : vector<4xi32>, vector<4xi8>
+  %0 = spv.ShiftRightArithmetic %arg0, %arg1: vector<4xi32>, vector<4xi8>
+  spv.ReturnValue %0 : vector<4xi32>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.ShiftRightLogical
+//===----------------------------------------------------------------------===//
+
+func @shift_right_logical(%arg0: vector<2xi32>, %arg1 : vector<2xi8>) -> vector<2xi32> {
+  // CHECK: {{%.*}} = spv.ShiftRightLogical {{%.*}}, {{%.*}} : vector<2xi32>, vector<2xi8>
+  %0 = spv.ShiftRightLogical %arg0, %arg1: vector<2xi32>, vector<2xi8>
+  spv.ReturnValue %0 : vector<2xi32>
 }
 
 // -----
@@ -859,6 +1068,46 @@ spv.module "Logical" "GLSL450" {
 }
 
 // -----
+
+//===----------------------------------------------------------------------===//
+// spv.SubgroupBallotKHR
+//===----------------------------------------------------------------------===//
+
+func @subgroup_ballot(%predicate: i1) -> vector<4xi32> {
+  %0 = spv.SubgroupBallotKHR %predicate: vector<4xi32>
+  return %0: vector<4xi32>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// spv.undef
+//===----------------------------------------------------------------------===//
+
+func @undef() -> () {
+  %0 = spv.undef : f32
+  %1 = spv.undef : vector<4xf32>
+  spv.Return
+}
+
+// -----
+
+func @undef() -> () {
+  // expected-error @+2{{expected non-function type}}
+  %0 = spv.undef :
+  spv.Return
+}
+
+// -----
+
+func @undef() -> () {
+  // expected-error @+2{{expected ':'}}
+  %0 = spv.undef
+  spv.Return
+}
+
+// -----
+
 
 //===----------------------------------------------------------------------===//
 // spv.Variable

@@ -80,12 +80,6 @@ public:
   IntegerType getI1Type();
   IntegerType getIntegerType(unsigned width);
   FunctionType getFunctionType(ArrayRef<Type> inputs, ArrayRef<Type> results);
-  MemRefType getMemRefType(ArrayRef<int64_t> shape, Type elementType,
-                           ArrayRef<AffineMap> affineMapComposition = {},
-                           unsigned memorySpace = 0);
-  VectorType getVectorType(ArrayRef<int64_t> shape, Type elementType);
-  RankedTensorType getTensorType(ArrayRef<int64_t> shape, Type elementType);
-  UnrankedTensorType getTensorType(Type elementType);
   TupleType getTupleType(ArrayRef<Type> elementTypes);
   NoneType getNoneType();
 
@@ -105,22 +99,12 @@ public:
   FloatAttr getFloatAttr(Type type, double value);
   FloatAttr getFloatAttr(Type type, const APFloat &value);
   StringAttr getStringAttr(StringRef bytes);
-  StringAttr getStringAttr(StringRef bytes, Type type);
   ArrayAttr getArrayAttr(ArrayRef<Attribute> value);
-  AffineMapAttr getAffineMapAttr(AffineMap map);
-  IntegerSetAttr getIntegerSetAttr(IntegerSet set);
-  TypeAttr getTypeAttr(Type type);
-  SymbolRefAttr getSymbolRefAttr(Operation *value);
-  SymbolRefAttr getSymbolRefAttr(StringRef value);
-  ElementsAttr getDenseElementsAttr(ShapedType type,
-                                    ArrayRef<Attribute> values);
-  ElementsAttr getDenseIntElementsAttr(ShapedType type,
-                                       ArrayRef<int64_t> values);
-  ElementsAttr getSparseElementsAttr(ShapedType type,
-                                     DenseIntElementsAttr indices,
-                                     DenseElementsAttr values);
-  ElementsAttr getOpaqueElementsAttr(Dialect *dialect, ShapedType type,
-                                     StringRef bytes);
+  FlatSymbolRefAttr getSymbolRefAttr(Operation *value);
+  FlatSymbolRefAttr getSymbolRefAttr(StringRef value);
+  SymbolRefAttr getSymbolRefAttr(StringRef value,
+                                 ArrayRef<FlatSymbolRefAttr> nestedReferences);
+
   // Returns a 0-valued attribute of the given `type`. This function only
   // supports boolean, integer, and 16-/32-/64-bit float types, and vector or
   // ranked tensor of them. Returns null attribute otherwise.
@@ -136,6 +120,8 @@ public:
   IntegerAttr getI32IntegerAttr(int32_t value);
   IntegerAttr getI64IntegerAttr(int64_t value);
 
+  DenseIntElementsAttr getI32VectorAttr(ArrayRef<int32_t> values);
+
   ArrayAttr getAffineMapArrayAttr(ArrayRef<AffineMap> values);
   ArrayAttr getI32ArrayAttr(ArrayRef<int32_t> values);
   ArrayAttr getI64ArrayAttr(ArrayRef<int64_t> values);
@@ -148,9 +134,6 @@ public:
   AffineExpr getAffineDimExpr(unsigned position);
   AffineExpr getAffineSymbolExpr(unsigned position);
   AffineExpr getAffineConstantExpr(int64_t constant);
-
-  AffineMap getAffineMap(unsigned dimCount, unsigned symbolCount,
-                         ArrayRef<AffineExpr> results);
 
   // Special cases of affine maps and integer sets
   /// Returns a zero result affine map with no dimensions or symbols: () -> ().
@@ -175,11 +158,6 @@ public:
   ///   returns:    (d0, d1)[s0] -> (d0 + 2, d1 + s0 + 2)
   AffineMap getShiftedAffineMap(AffineMap map, int64_t shift);
 
-  // Integer set.
-  IntegerSet getIntegerSet(unsigned dimCount, unsigned symbolCount,
-                           ArrayRef<AffineExpr> constraints,
-                           ArrayRef<bool> isEq);
-  // TODO: Helpers for affine map/exprs, etc.
 protected:
   MLIRContext *context;
 };
@@ -303,6 +281,9 @@ public:
   /// Returns the current insertion point of the builder.
   Block::iterator getInsertionPoint() const { return insertPoint; }
 
+  /// Insert the given operation at the current insertion point and return it.
+  virtual Operation *insert(Operation *op);
+
   /// Add new block and set the insertion point to the end of it. The block is
   /// inserted at the provided insertion point of 'parent'.
   Block *createBlock(Region *parent, Region::iterator insertPt = {});
@@ -315,7 +296,7 @@ public:
   Block *getBlock() const { return block; }
 
   /// Creates an operation given the fields represented as an OperationState.
-  virtual Operation *createOperation(const OperationState &state);
+  Operation *createOperation(const OperationState &state);
 
   /// Create an operation of specific op type at the current insertion point.
   template <typename OpTy, typename... Args>
@@ -334,8 +315,17 @@ public:
   template <typename OpTy, typename... Args>
   void createOrFold(SmallVectorImpl<Value *> &results, Location location,
                     Args &&... args) {
-    auto op = create<OpTy>(location, std::forward<Args>(args)...);
-    tryFold(op.getOperation(), results);
+    // Create the operation without using 'createOperation' as we don't want to
+    // insert it yet.
+    OperationState state(location, OpTy::getOperationName());
+    OpTy::build(this, state, std::forward<Args>(args)...);
+    Operation *op = Operation::create(state);
+
+    // Fold the operation. If successful destroy it, otherwise insert it.
+    if (succeeded(tryFold(op, results)))
+      op->destroy();
+    else
+      insert(op);
   }
 
   /// Overload to create or fold a single result operation.
@@ -362,44 +352,35 @@ public:
     return op;
   }
 
+  /// Attempts to fold the given operation and places new results within
+  /// 'results'. Returns success if the operation was folded, failure otherwise.
+  /// Note: This function does not erase the operation on a successful fold.
+  LogicalResult tryFold(Operation *op, SmallVectorImpl<Value *> &results);
+
   /// Creates a deep copy of the specified operation, remapping any operands
   /// that use values outside of the operation using the map that is provided
   /// ( leaving them alone if no entry is present).  Replaces references to
   /// cloned sub-operations to the corresponding operation that is copied,
   /// and adds those mappings to the map.
   Operation *clone(Operation &op, BlockAndValueMapping &mapper) {
-    Operation *cloneOp = op.clone(mapper);
-    insert(cloneOp);
-    return cloneOp;
+    return insert(op.clone(mapper));
   }
-  Operation *clone(Operation &op) {
-    Operation *cloneOp = op.clone();
-    insert(cloneOp);
-    return cloneOp;
-  }
+  Operation *clone(Operation &op) { return insert(op.clone()); }
 
   /// Creates a deep copy of this operation but keep the operation regions
   /// empty. Operands are remapped using `mapper` (if present), and `mapper` is
   /// updated to contain the results.
   Operation *cloneWithoutRegions(Operation &op, BlockAndValueMapping &mapper) {
-    Operation *cloneOp = op.cloneWithoutRegions(mapper);
-    insert(cloneOp);
-    return cloneOp;
+    return insert(op.cloneWithoutRegions(mapper));
   }
   Operation *cloneWithoutRegions(Operation &op) {
-    Operation *cloneOp = op.cloneWithoutRegions();
-    insert(cloneOp);
-    return cloneOp;
+    return insert(op.cloneWithoutRegions());
+  }
+  template <typename OpT> OpT cloneWithoutRegions(OpT op) {
+    return cast<OpT>(cloneWithoutRegions(*op.getOperation()));
   }
 
 private:
-  /// Attempts to fold the given operation and places new results within
-  /// 'results'.
-  void tryFold(Operation *op, SmallVectorImpl<Value *> &results);
-
-  /// Insert the given operation at the current insertion point.
-  void insert(Operation *op);
-
   Block *block = nullptr;
   Block::iterator insertPoint;
 };

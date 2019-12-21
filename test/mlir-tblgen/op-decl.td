@@ -9,7 +9,9 @@ def Test_Dialect : Dialect {
 class NS_Op<string mnemonic, list<OpTrait> traits> :
     Op<Test_Dialect, mnemonic, traits>;
 
-def NS_AOp : NS_Op<"a_op", [NoSideEffect]> {
+// NoSideEffect trait is included twice to ensure it gets uniqued during
+// emission.
+def NS_AOp : NS_Op<"a_op", [NoSideEffect, NoSideEffect]> {
   let arguments = (ins
     I32:$a,
     Variadic<F32>:$b,
@@ -42,17 +44,17 @@ def NS_AOp : NS_Op<"a_op", [NoSideEffect]> {
 
 // CHECK-LABEL: NS::AOp declarations
 
-// CHECK:  class AOpOperandAdaptor {
-// CHECK:  public:
-// CHECK:    AOpOperandAdaptor(ArrayRef<Value *> values);
-// CHECK:    ArrayRef<Value *> getODSOperands(unsigned index);
-// CHECK:    Value *a();
-// CHECK:    ArrayRef<Value *> b();
-// CHECK:  private:
-// CHECK:    ArrayRef<Value *> tblgen_operands;
-// CHECK:  };
+// CHECK: class AOpOperandAdaptor {
+// CHECK: public:
+// CHECK:   AOpOperandAdaptor(ArrayRef<Value *> values);
+// CHECK:   ArrayRef<Value *> getODSOperands(unsigned index);
+// CHECK:   Value *a();
+// CHECK:   ArrayRef<Value *> b();
+// CHECK: private:
+// CHECK:   ArrayRef<Value *> tblgen_operands;
+// CHECK: };
 
-// CHECK: class AOp : public Op<AOp, OpTrait::AtLeastNResults<1>::Impl, OpTrait::HasNoSideEffect, OpTrait::AtLeastNOperands<1>::Impl> {
+// CHECK: class AOp : public Op<AOp, OpTrait::AtLeastNResults<1>::Impl, OpTrait::HasNoSideEffect, OpTrait::AtLeastNOperands<1>::Impl
 // CHECK: public:
 // CHECK:   using Op::Op;
 // CHECK:   using OperandAdaptor = AOpOperandAdaptor;
@@ -63,11 +65,14 @@ def NS_AOp : NS_Op<"a_op", [NoSideEffect]> {
 // CHECK:   Operation::result_range getODSResults(unsigned index);
 // CHECK:   Value *r();
 // CHECK:   Region &someRegion();
+// CHECK:   IntegerAttr attr1Attr()
 // CHECK:   APInt attr1();
+// CHECK:   FloatAttr attr2Attr()
 // CHECK:   Optional< APFloat > attr2();
 // CHECK:   static void build(Value *val);
-// CHECK:   static void build(Builder *, OperationState &tblgen_state, Type r, ArrayRef<Type> s, Value *a, ArrayRef<Value *> b, IntegerAttr attr1, /*optional*/FloatAttr attr2);
-// CHECK:   static void build(Builder *, OperationState &tblgen_state, ArrayRef<Type> resultTypes, ArrayRef<Value *> operands, ArrayRef<NamedAttribute> attributes);
+// CHECK:   static void build(Builder *tblgen_builder, OperationState &tblgen_state, Type r, ArrayRef<Type> s, Value *a, ValueRange b, IntegerAttr attr1, /*optional*/FloatAttr attr2)
+// CHECK:   static void build(Builder *tblgen_builder, OperationState &tblgen_state, Type r, ArrayRef<Type> s, Value *a, ValueRange b, APInt attr1, /*optional*/FloatAttr attr2)
+// CHECK:   static void build(Builder *, OperationState &tblgen_state, ArrayRef<Type> resultTypes, ValueRange operands, ArrayRef<NamedAttribute> attributes)
 // CHECK:   static ParseResult parse(OpAsmParser &parser, OperationState &result);
 // CHECK:   void print(OpAsmPrinter &p);
 // CHECK:   LogicalResult verify();

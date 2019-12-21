@@ -27,7 +27,6 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/MemRefUtils.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Module.h"
@@ -123,14 +122,14 @@ static void initializeLLVM() {
   llvm::InitializeNativeTargetAsmPrinter();
 }
 
-static inline Error make_string_error(const llvm::Twine &message) {
+static inline Error make_string_error(const Twine &message) {
   return llvm::make_error<llvm::StringError>(message.str(),
                                              llvm::inconvertibleErrorCode());
 }
 
-static llvm::Optional<unsigned> getCommandLineOptLevel() {
-  llvm::Optional<unsigned> optLevel;
-  llvm::SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
+static Optional<unsigned> getCommandLineOptLevel() {
+  Optional<unsigned> optLevel;
+  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
       optO0, optO1, optO2, optO3};
 
   // Determine if there is an optimization flag present.
@@ -177,7 +176,7 @@ compileAndExecute(ModuleOp module, StringRef entryPoint,
 static Error compileAndExecuteVoidFunction(
     ModuleOp module, StringRef entryPoint,
     std::function<llvm::Error(llvm::Module *)> transformer) {
-  FuncOp mainFunction = module.lookupSymbol<FuncOp>(entryPoint);
+  auto mainFunction = module.lookupSymbol<LLVM::LLVMFuncOp>(entryPoint);
   if (!mainFunction || mainFunction.getBlocks().empty())
     return make_string_error("entry point not found");
   void *empty = nullptr;
@@ -187,22 +186,14 @@ static Error compileAndExecuteVoidFunction(
 static Error compileAndExecuteSingleFloatReturnFunction(
     ModuleOp module, StringRef entryPoint,
     std::function<llvm::Error(llvm::Module *)> transformer) {
-  FuncOp mainFunction = module.lookupSymbol<FuncOp>(entryPoint);
-  if (!mainFunction || mainFunction.isExternal()) {
+  auto mainFunction = module.lookupSymbol<LLVM::LLVMFuncOp>(entryPoint);
+  if (!mainFunction || mainFunction.isExternal())
     return make_string_error("entry point not found");
-  }
 
-  if (!mainFunction.getType().getInputs().empty())
+  if (mainFunction.getType().getFunctionNumParams() != 0)
     return make_string_error("function inputs not supported");
 
-  if (mainFunction.getType().getResults().size() != 1)
-    return make_string_error("only single f32 function result supported");
-
-  auto t = mainFunction.getType().getResults()[0].dyn_cast<LLVM::LLVMType>();
-  if (!t)
-    return make_string_error("only single llvm.f32 function result supported");
-  auto *llvmTy = t.getUnderlyingType();
-  if (llvmTy != llvmTy->getFloatTy(llvmTy->getContext()))
+  if (!mainFunction.getType().getFunctionResultType().isFloatTy())
     return make_string_error("only single llvm.f32 function result supported");
 
   float res;
@@ -226,7 +217,7 @@ static Error compileAndExecuteSingleFloatReturnFunction(
 // the MLIR module to the ExecutionEngine.
 int mlir::JitRunnerMain(
     int argc, char **argv,
-    llvm::function_ref<LogicalResult(mlir::ModuleOp)> mlirTransformer) {
+    function_ref<LogicalResult(mlir::ModuleOp)> mlirTransformer) {
   llvm::InitLLVM y(argc, argv);
 
   initializeLLVM();
@@ -234,8 +225,8 @@ int mlir::JitRunnerMain(
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "MLIR CPU execution driver\n");
 
-  llvm::Optional<unsigned> optLevel = getCommandLineOptLevel();
-  llvm::SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
+  Optional<unsigned> optLevel = getCommandLineOptLevel();
+  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
       optO0, optO1, optO2, optO3};
   unsigned optCLIPosition = 0;
   // Determine if there is an optimization flag present, and its CLI position
@@ -249,7 +240,7 @@ int mlir::JitRunnerMain(
   }
   // Generate vector of pass information, plus the index at which we should
   // insert any optimization passes in that vector (optPosition).
-  llvm::SmallVector<const llvm::PassInfo *, 4> passes;
+  SmallVector<const llvm::PassInfo *, 4> passes;
   unsigned optPosition = 0;
   for (unsigned i = 0, e = llvmPasses.size(); i < e; ++i) {
     passes.push_back(llvmPasses[i]);

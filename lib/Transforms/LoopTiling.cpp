@@ -168,13 +168,13 @@ constructTiledIndexSetHyperRect(MutableArrayRef<AffineForOp> origLoops,
       boundExprs.push_back(dim + tileSizes[i]);
       boundExprs.append(origUbMap.getResults().begin(),
                         origUbMap.getResults().end());
-      auto ubMap = b.getAffineMap(origUbMap.getNumDims() + 1,
+      auto ubMap = AffineMap::get(origUbMap.getNumDims() + 1,
                                   origUbMap.getNumSymbols(), boundExprs);
       newLoops[width + i].setUpperBound(/*operands=*/ubOperands, ubMap);
     } else {
       // No need of the min expression.
       auto dim = b.getAffineDimExpr(0);
-      auto ubMap = b.getAffineMap(1, 0, dim + tileSizes[i]);
+      auto ubMap = AffineMap::get(1, 0, dim + tileSizes[i]);
       newLoops[width + i].setUpperBound(newLoops[i].getInductionVar(), ubMap);
     }
   }
@@ -362,7 +362,7 @@ void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
   // one possible approach. Or compute a polynomial in tile sizes and solve for
   // it.
 
-  // For an n-d tilable band, compute n^th root of the excess.
+  // For an n-d tileable band, compute n^th root of the excess.
   unsigned tSize =
       static_cast<unsigned>(floorl(std::pow(excessFactor, 1.0 / band.size())));
   // We'll keep a running product to determine the last tile size better.
