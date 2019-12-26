@@ -1,19 +1,10 @@
 //===- builder-api-test.cpp - Tests for Declarative Builder APIs ----------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 // RUN: mlir-edsc-builder-api-test | FileCheck %s
 
@@ -101,8 +92,8 @@ TEST_FUNC(builder_dynamic_for_func_args) {
   // CHECK-DAG:    [[rf4:%[0-9]+]] = mulf {{.*}}, {{.*}} : f32
   //     CHECK:    {{.*}} = subf [[rf3]], [[rf4]] : f32
   // CHECK-DAG:    [[ri1:%[0-9]+]] = addi {{.*}}, {{.*}} : i32
-  // CHECK-DAG:    [[ri2:%[0-9]+]] = divis [[ri1]], {{.*}} : i32
-  // CHECK-DAG:    [[ri3:%[0-9]+]] = remis [[ri2]], {{.*}} : i32
+  // CHECK-DAG:    [[ri2:%[0-9]+]] = divi_signed [[ri1]], {{.*}} : i32
+  // CHECK-DAG:    [[ri3:%[0-9]+]] = remi_signed [[ri2]], {{.*}} : i32
   // CHECK-DAG:    [[ri4:%[0-9]+]] = muli {{.*}}, {{.*}} : i32
   //     CHECK:    {{.*}} = subi [[ri3]], [[ri4]] : i32
   // clang-format on
@@ -484,7 +475,7 @@ TEST_FUNC(select_op_i32) {
   IndexedValue A(f.getArgument(0));
   IndexHandle i, j;
   AffineLoopNestBuilder({&i, &j}, {zero, zero}, {one, one}, {1, 1})([&]{
-    // This test exercises IndexedValue::operator Value*.
+    // This test exercises IndexedValue::operator Value.
     // Without it, one must force conversion to ValueHandle as such:
     //   edsc::intrinsics::select(
     //      i == zero, ValueHandle(A(zero, zero)), ValueHandle(ValueA(i, j)))
@@ -802,7 +793,7 @@ TEST_FUNC(affine_if_op) {
   };
   auto intSet = IntegerSet::get(2, 2, affineExprs, isEq);
 
-  SmallVector<Value *, 4> affineIfArgs = {zero, zero, ten, ten};
+  SmallVector<Value, 4> affineIfArgs = {zero, zero, ten, ten};
   intrinsics::affine_if(intSet, affineIfArgs, /*withElseRegion=*/false);
   intrinsics::affine_if(intSet, affineIfArgs, /*withElseRegion=*/true);
 
